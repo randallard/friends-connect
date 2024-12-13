@@ -60,6 +60,7 @@ async fn main() {
         .route("/api/connections/check/:id", get(check_connection))
         .route("/connect/:id", get(handle_connection_link))
         .route("/api/connections/recover", post(recover_connection))
+        .route("/api/backup-key", get(get_backup_key))
         .layer(cors)
         .with_state(app_state);
 
@@ -188,7 +189,34 @@ async fn delete_connection(
     }
 }
 
-// In web-demo/src/main.rs
+use ring::hmac;
+use base64::{Engine as _, engine::general_purpose::STANDARD as b64};
+
+impl AppState {
+    fn generate_backup_key(&self, user_id: &str) -> String {
+        // Create a deterministic but unique key for each user
+        let key = hmac::Key::new(hmac::HMAC_SHA256, b"friends-connect-backup-key");
+        let signature = hmac::sign(&key, user_id.as_bytes());
+        b64.encode(signature.as_ref())
+    }
+
+    fn verify_backup_key(&self, user_id: &str, provided_key: &str) -> bool {
+        let expected_key = self.generate_backup_key(user_id);
+        ring::constant_time::verify_slices_are_equal(
+            expected_key.as_bytes(),
+            provided_key.as_bytes()
+        ).is_ok()
+    }
+}
+
+async fn get_backup_key(
+    State(state): State<AppState>,
+    Query(query): Query<ListConnectionsQuery>,
+) -> Result<Json<String>, StatusCode> {
+    let key = state.generate_backup_key(&query.user_id);
+    Ok(Json(key))
+}
+
 async fn recover_connection(
     State(state): State<AppState>,
     Json(connection): Json<Connection>,
