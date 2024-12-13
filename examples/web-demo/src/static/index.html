@@ -19,6 +19,13 @@
         }
         .error { color: red; }
         .success { color: green; }
+        #logoutButton {
+            float: right;
+            background-color: #f44336;
+            color: white;
+            border: none;
+            border-radius: 4px;
+        }
     </style>
 </head>
 <body>
@@ -33,6 +40,7 @@
     <div id="mainSection" class="hidden">
         <div class="card">
             <h2>Your Profile</h2>
+            <button id="logoutButton" onclick="logout()">Logout</button>
             <p>Logged in as: <span id="userProfile"></span></p>
             <p>User ID: <span id="userId"></span></p>
             <button onclick="createConnection()">Create New Connection</button>
@@ -61,12 +69,37 @@
         let currentUser = null;
         let currentConnectionLink = null;
 
+        // Check for saved user data on page load
+        window.addEventListener('load', () => {
+            const savedUser = localStorage.getItem('currentUser');
+            if (savedUser) {
+                currentUser = JSON.parse(savedUser);
+                showLoggedInState();
+            }
+        });
+
         // Check for connection parameter in URL
         const urlParams = new URLSearchParams(window.location.search);
         const connectionId = urlParams.get('connection');
         if (connectionId) {
             document.getElementById('loginSection').classList.remove('hidden');
             document.getElementById('acceptConnection').classList.remove('hidden');
+        }
+
+        function showLoggedInState() {
+            document.getElementById('userProfile').textContent = currentUser.name;
+            document.getElementById('userId').textContent = currentUser.id;
+            document.getElementById('loginSection').classList.add('hidden');
+            document.getElementById('mainSection').classList.remove('hidden');
+            refreshConnections();
+        }
+
+        function logout() {
+            localStorage.removeItem('currentUser');
+            currentUser = null;
+            document.getElementById('mainSection').classList.add('hidden');
+            document.getElementById('loginSection').classList.remove('hidden');
+            document.getElementById('userName').value = '';
         }
 
         async function login() {
@@ -84,21 +117,17 @@
                 });
 
                 currentUser = await response.json();
-                document.getElementById('userProfile').textContent = currentUser.name;
-                document.getElementById('userId').textContent = currentUser.id;
+                // Save user data to localStorage
+                localStorage.setItem('currentUser', JSON.stringify(currentUser));
                 
-                document.getElementById('loginSection').classList.add('hidden');
-                document.getElementById('mainSection').classList.remove('hidden');
-                
-                if (!connectionId) {
-                    await refreshConnections();
-                }
+                showLoggedInState();
             } catch (error) {
                 console.error('Login error:', error);
                 alert('Error during login: ' + error.message);
             }
         }
 
+        // ... rest of the code remains the same ...
         async function createConnection() {
             try {
                 const response = await fetch('http://localhost:3000/api/connections/create', {
