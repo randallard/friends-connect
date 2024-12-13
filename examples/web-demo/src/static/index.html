@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Friends Connect Demo</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
+        .card { border: 1px solid #ccc; padding: 1rem; margin: 1rem 0; border-radius: 4px; }
+        button { padding: 0.5rem 1rem; cursor: pointer; }
+        input { padding: 0.5rem; margin-right: 0.5rem; }
+        #connectionsList { margin-top: 1rem; }
+        .hidden { display: none; }
+        .connection-link {
+            padding: 1rem;
+            background: #f5f5f5;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin: 1rem 0;
+            word-break: break-all;
+        }
+        .error { color: red; }
+        .success { color: green; }
+    </style>
+</head>
+<body>
+    <h1>Friends Connect Example</h1>
+    
+    <div id="loginSection" class="card">
+        <h2>Login</h2>
+        <input type="text" id="userName" placeholder="Enter your name">
+        <button onclick="login()">Login</button>
+    </div>
+
+    <div id="mainSection" class="hidden">
+        <div class="card">
+            <h2>Your Profile</h2>
+            <p>Logged in as: <span id="userProfile"></span></p>
+            <p>User ID: <span id="userId"></span></p>
+            <button onclick="createConnection()">Create New Connection</button>
+            <div id="connectionLinkSection" class="hidden">
+                <h3>Share this link with your friend:</h3>
+                <div class="connection-link" id="connectionLink"></div>
+                <button onclick="copyLink()">Copy Link</button>
+            </div>
+        </div>
+
+        <div id="connectionsList" class="card">
+            <h2>Your Connections</h2>
+            <button onclick="refreshConnections()">Refresh Connections</button>
+            <div id="connectionsContent"></div>
+        </div>
+    </div>
+
+    <div id="acceptConnection" class="card hidden">
+        <h2>Accept Connection</h2>
+        <p>Someone wants to connect with you!</p>
+        <button onclick="acceptConnection()">Accept Connection</button>
+        <div id="acceptStatus"></div>
+    </div>
+
+    <script>
+        let currentUser = null;
+        let currentConnectionLink = null;
+
+        // Check for connection parameter in URL
+        const urlParams = new URLSearchParams(window.location.search);
+        const connectionId = urlParams.get('connection');
+        if (connectionId) {
+            document.getElementById('loginSection').classList.remove('hidden');
+            document.getElementById('acceptConnection').classList.remove('hidden');
+        }
+
+        async function login() {
+            try {
+                const userName = document.getElementById('userName').value;
+                if (!userName) {
+                    alert('Please enter your name');
+                    return;
+                }
+
+                const response = await fetch('http://localhost:3000/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: userName })
+                });
+
+                currentUser = await response.json();
+                document.getElementById('userProfile').textContent = currentUser.name;
+                document.getElementById('userId').textContent = currentUser.id;
+                
+                document.getElementById('loginSection').classList.add('hidden');
+                document.getElementById('mainSection').classList.remove('hidden');
+                
+                if (!connectionId) {
+                    await refreshConnections();
+                }
+            } catch (error) {
+                console.error('Login error:', error);
+                alert('Error during login: ' + error.message);
+            }
+        }
+
+        async function createConnection() {
+            try {
+                const response = await fetch('http://localhost:3000/api/connections/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(currentUser.id)
+                });
+
+                const data = await response.json();
+                currentConnectionLink = `http://localhost:3000/connect/${data.connection_id}`;
+                
+                const linkSection = document.getElementById('connectionLinkSection');
+                linkSection.classList.remove('hidden');
+                
+                const linkElement = document.getElementById('connectionLink');
+                linkElement.textContent = currentConnectionLink;
+                
+                await refreshConnections();
+            } catch (error) {
+                console.error('Create connection error:', error);
+                alert('Error creating connection: ' + error.message);
+            }
+        }
+
+        async function copyLink() {
+            if (currentConnectionLink) {
+                await navigator.clipboard.writeText(currentConnectionLink);
+                alert('Link copied to clipboard!');
+            }
+        }
+
+        async function acceptConnection() {
+            try {
+                if (!currentUser) {
+                    alert('Please login first');
+                    return;
+                }
+
+                const response = await fetch(`http://localhost:3000/api/connections/accept/${connectionId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(currentUser.id)
+                });
+
+                const connection = await response.json();
+                document.getElementById('acceptStatus').innerHTML = 
+                    '<p class="success">Connection successfully established!</p>';
+                
+                document.getElementById('acceptConnection').classList.add('hidden');
+                document.getElementById('mainSection').classList.remove('hidden');
+                await refreshConnections();
+            } catch (error) {
+                console.error('Accept connection error:', error);
+                document.getElementById('acceptStatus').innerHTML = 
+                    `<p class="error">Error accepting connection: ${error.message}</p>`;
+            }
+        }
+
+        async function refreshConnections() {
+            try {
+                const response = await fetch(
+                    `http://localhost:3000/api/connections/list?user_id=${encodeURIComponent(currentUser.id)}`,
+                    {
+                        method: 'GET',
+                        headers: { 'Content-Type': 'application/json' }
+                    }
+                );
+
+                const connections = await response.json();
+                const content = document.getElementById('connectionsContent');
+                
+                if (connections.length === 0) {
+                    content.innerHTML = '<p>No connections yet</p>';
+                    return;
+                }
+
+                content.innerHTML = connections.map(conn => `
+                    <div class="connection">
+                        <p>Connected with: ${conn.recipient_id ? conn.recipient_label : conn.initiator_label}</p>
+                        <p>Status: ${conn.recipient_id ? 'Active' : 'Pending'}</p>
+                    </div>
+                `).join('');
+            } catch (error) {
+                console.error('Refresh connections error:', error);
+                document.getElementById('connectionsContent').innerHTML = 
+                    `<p class="error">Error loading connections: ${error.message}</p>`;
+            }
+        }
+    </script>
+</body>
+</html>

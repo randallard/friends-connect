@@ -1,0 +1,43 @@
+flowchart TD
+    Start([User wants to add connection]) --> A{Has Profile?}
+    A -->|No| B[Create Quick Profile]
+    A -->|Yes| C[Generate Connection Link]
+    B --> C
+    
+    C --> D[Store Connection Request]
+    D --> E[Share Link]
+    
+    %% Recipient flow
+    E --> F[Recipient Opens Link]
+    F --> G{Has Profile?}
+    
+    G -->|No| H[Create Quick Profile]
+    G -->|Yes| I[Load Existing Profile]
+    
+    H --> J[Store Connection]
+    I --> J
+    
+    J --> K[Update Both Profiles]
+    K --> L[Show Connected Status]
+    
+    %% Direct connection flow for existing users
+    M([Direct Connection Request]) --> N[Search by Name/ID]
+    N --> O{User Found?}
+    O -->|Yes| P[Send Connection Request]
+    O -->|No| Q[Show Not Found]
+    
+    P --> R{Accept Request?}
+    R -->|Yes| J
+    R -->|No| S[Store Rejection]
+    
+    %% Subgraph for stored data
+    subgraph "Connection Data"
+        T[(Connection Records)]
+        U[(Pending Requests)]
+        V[(Connection Links)]
+    end
+    
+    D --> V
+    J --> T
+    P --> U
+    S --> U
