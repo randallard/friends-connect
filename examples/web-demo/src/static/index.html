@@ -133,6 +133,23 @@
             checkConnection(); // Call the check immediately
         }
 
+        const LOCAL_NAMES_KEY = 'connectionLocalNames';
+
+        function getLocalNames() {
+            const stored = localStorage.getItem(LOCAL_NAMES_KEY);
+            return stored ? JSON.parse(stored) : {};
+        }
+
+        function setLocalName(connectionId, name) {
+            const names = getLocalNames();
+            names[connectionId] = name;
+            localStorage.setItem(LOCAL_NAMES_KEY, JSON.stringify(names));
+        }
+
+        function getLocalName(connectionId) {
+            return getLocalNames()[connectionId];
+        }
+
         function showLoggedInState() {
             document.getElementById('userProfile').textContent = currentUser.name;
             document.getElementById('userId').textContent = currentUser.id;
@@ -407,7 +424,7 @@
                 // First get local connections
                 let connections = await getStoredConnections();
                 
-                // Then fetch any new ones from server
+                // Then fetch from server
                 const response = await fetch(
                     apiUrl(`/api/connections/list?user_id=${encodeURIComponent(currentUser.id)}`),
                     {
@@ -418,12 +435,34 @@
 
                 const serverConnections = await response.json();
                 
-                // Merge connections, preferring server versions
-                const mergedConnections = mergeConnections(connections, serverConnections);
+                // Try to recover any connections missing from server
+                for (const localConn of connections) {
+                    if (!serverConnections.some(sc => sc.id === localConn.id)) {
+                        try {
+                            await fetch(apiUrl('/api/connections/recover'), {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(localConn)
+                            });
+                        } catch (error) {
+                            console.warn(`Failed to recover connection ${localConn.id}:`, error);
+                        }
+                    }
+                }
                 
-                // Update local storage
+                // Refresh the list again to get recovered connections
+                const finalResponse = await fetch(
+                    apiUrl(`/api/connections/list?user_id=${encodeURIComponent(currentUser.id)}`),
+                    {
+                        method: 'GET',
+                        headers: { 'Content-Type': 'application/json' }
+                    }
+                );
+                
+                const finalConnections = await finalResponse.json();
+                const mergedConnections = mergeConnections(connections, finalConnections);
+                
                 localStorage.setItem('connections', JSON.stringify(mergedConnections));
-                
                 displayConnections(mergedConnections);
             } catch (error) {
                 console.error('Refresh connections error:', error);
@@ -447,19 +486,26 @@
 
         function displayConnections(connections) {
             const content = document.getElementById('connectionsContent');
+            const localNames = getLocalNames();
             
             if (connections.length === 0) {
                 content.innerHTML = '<p>No connections yet</p>';
                 return;
             }
 
-            content.innerHTML = connections.map(conn => `
-                <div class="connection">
-                    <p>Connected with: ${conn.recipient_id ? conn.recipient_label : conn.initiator_label}</p>
-                    <p>Status: ${conn.recipient_id ? 'Active' : 'Pending'}</p>
-                    <button onclick="deleteConnection('${conn.id}')" class="delete-btn">Delete</button>
-                </div>
-            `).join('');
+            content.innerHTML = connections.map(conn => {
+                const localName = localNames[conn.id] || (conn.recipient_id ? conn.recipient_label : conn.initiator_label);
+                return `
+                    <div class="connection" style="padding:10px; border:thin solid green">
+                        <input type="text"
+                            value="${localName}"
+                            onchange="setLocalName('${conn.id}', this.value)"
+                            class="connection-name-input">
+                        <p>Status: ${conn.recipient_id ? 'Active' : 'Pending'}</p>
+                        <button onclick="deleteConnection('${conn.id}')" class="delete-btn">Delete</button>
+                    </div>
+                `;
+            }).join('');
         }
 
         async function deleteConnection(connectionId) {

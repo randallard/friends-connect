@@ -8,6 +8,7 @@ use friends_connect::{
     memory::InMemoryConnectionManager,
     connection::ConnectionManager,
     models::{Connection, ConnectionRequest},
+    error::ConnectionError,
 };
 use std::sync::Arc;
 use std::net::SocketAddr;
@@ -58,6 +59,7 @@ async fn main() {
         .route("/api/connections/all", get(list_all_connections))
         .route("/api/connections/check/:id", get(check_connection))
         .route("/connect/:id", get(handle_connection_link))
+        .route("/api/connections/recover", post(recover_connection))
         .layer(cors)
         .with_state(app_state);
 
@@ -181,7 +183,39 @@ async fn delete_connection(
 ) -> StatusCode {
     println!("Deleting connection: {}", connection_id);
     match state.connection_manager.delete_connection(&connection_id).await {
-        Ok(_) => StatusCode::OK,
+        Ok(_) | Err(ConnectionError::NotFound) => StatusCode::OK,
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+// In web-demo/src/main.rs
+async fn recover_connection(
+    State(state): State<AppState>,
+    Json(connection): Json<Connection>,
+) -> StatusCode {
+    println!("Recovery attempt for connection {}", connection.id);
+    println!("  Status: {:?}", connection.status);
+    println!("  Initiator: {} ({})", connection.initiator_id, connection.initiator_label);
+    if let Some(ref recipient) = connection.recipient_id {
+        println!("  Recipient: {} ({:?})", recipient, connection.recipient_label);
+    }
+    println!("  Created: {}", connection.created_at);
+    if let Some(connected) = connection.connected_at {
+        println!("  Connected: {}", connected);
+    }
+
+    match state.connection_manager.recover_connection(connection).await {
+        Ok(_) => {
+            println!("  Recovery successful");
+            StatusCode::OK
+        }
+        Err(ConnectionError::AlreadyExists) => {
+            println!("  Connection already exists - no recovery needed");
+            StatusCode::OK
+        }
+        Err(e) => {
+            println!("  Recovery failed: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
     }
 }

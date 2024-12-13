@@ -39,4 +39,7 @@ pub trait ConnectionManager {
     async fn get_request(&self, 
         connection_id: &str
     ) -> Result<ConnectionRequest, ConnectionError>;
+
+    async fn recover_connection(&self, connection: Connection) -> Result<(), ConnectionError>;
+
 }

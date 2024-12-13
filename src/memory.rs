@@ -15,13 +15,64 @@ pub struct InMemoryConnectionManager {
     validator: Box<dyn ConnectionValidator + Send + Sync>,
 }
 
-impl InMemoryConnectionManager {
-    pub fn new() -> Self {
-        InMemoryConnectionManager {
+impl Default for InMemoryConnectionManager {
+    fn default() -> Self {
+        Self {
             connections: Arc::new(RwLock::new(HashMap::new())),
             requests: Arc::new(RwLock::new(HashMap::new())),
             validator: Box::new(DefaultConnectionValidator::new()),
         }
+    }
+}
+impl InMemoryConnectionManager {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    async fn validate_recovery(&self, connection: &Connection) -> Result<(), ConnectionError> {
+        println!("Validating connection recovery for {}", connection.id);
+
+        // Check if connection already exists
+        if self.connections.read().await.contains_key(&connection.id) {
+            println!("  Connection already exists in storage");
+            return Err(ConnectionError::AlreadyExists);
+        }
+
+        // Additional validation checks
+        match connection.status {
+            ConnectionStatus::Active => {
+                if connection.recipient_id.is_none() {
+                    println!("  Invalid: Active connection missing recipient");
+                    return Err(ConnectionError::InvalidRequest(
+                        "Active connection must have recipient".to_string()
+                    ));
+                }
+                if connection.connected_at.is_none() {
+                    println!("  Invalid: Active connection missing connected_at timestamp");
+                    return Err(ConnectionError::InvalidRequest(
+                        "Active connection must have connected_at".to_string()
+                    ));
+                }
+            }
+            ConnectionStatus::Rejected => {
+                if connection.recipient_id.is_none() {
+                    println!("  Invalid: Rejected connection missing recipient");
+                    return Err(ConnectionError::InvalidRequest(
+                        "Rejected connection must have recipient".to_string()
+                    ));
+                }
+            }
+            _ => {}
+        }
+
+        // Use existing validator
+        match self.validator.validate_connection(connection) {
+            Ok(_) => println!("  Validation successful"),
+            Err(e) => println!("  Validation failed: {}", e),
+        }
+        self.validator.validate_connection(connection)?;
+
+        Ok(())
     }
 }
 
@@ -64,6 +115,19 @@ impl ConnectionManager for InMemoryConnectionManager {
         self.connections.write().await.insert(connection.id.clone(), connection);
 
         Ok(request)
+    }
+
+    async fn recover_connection(&self, connection: Connection) -> Result<(), ConnectionError> {
+        // Validate the connection before recovery
+        self.validate_recovery(&connection).await?;
+
+        // Store the recovered connection
+        self.connections
+            .write()
+            .await
+            .insert(connection.id.clone(), connection);
+
+        Ok(())
     }
 
     async fn accept_connection(
@@ -158,6 +222,38 @@ impl ConnectionManager for InMemoryConnectionManager {
 mod tests {
     use super::*;
 
+    // In memory.rs tests
+    #[tokio::test]
+    async fn test_connection_recovery() {
+        let manager = InMemoryConnectionManager::new();
+        
+        // Create a test connection
+        let connection = Connection {
+            id: "test-id".to_string(),
+            initiator_id: "user1".to_string(),
+            recipient_id: Some("user2".to_string()),
+            initiator_label: "Friend".to_string(),
+            recipient_label: Some("My Friend".to_string()),
+            status: ConnectionStatus::Active,
+            created_at: Utc::now(),
+            connected_at: Some(Utc::now()),
+        };
+
+        // Recover the connection
+        assert!(manager.recover_connection(connection.clone()).await.is_ok());
+
+        // Verify connection was recovered
+        let recovered = manager.get_connection("test-id").await.unwrap();
+        assert_eq!(recovered.id, connection.id);
+        assert_eq!(recovered.status, ConnectionStatus::Active);
+
+        // Verify duplicate recovery fails
+        assert!(matches!(
+            manager.recover_connection(connection).await,
+            Err(ConnectionError::AlreadyExists)
+        ));
+    }
+
     #[tokio::test]
     async fn test_create_and_accept_connection() {
         let manager = InMemoryConnectionManager::new();
@@ -211,5 +307,101 @@ mod tests {
         // List connections for user1
         let connections = manager.list_connections("user1").await.unwrap();
         assert_eq!(connections.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_connection_recovery_validation() {
+        let manager = InMemoryConnectionManager::new();
+        
+        // Test 1: Valid pending connection
+        let pending_connection = Connection {
+            id: "test-pending".to_string(),
+            initiator_id: "user1".to_string(),
+            recipient_id: None,
+            initiator_label: "Friend".to_string(),
+            recipient_label: None,
+            status: ConnectionStatus::Pending,
+            created_at: Utc::now(),
+            connected_at: None,
+        };
+        assert!(manager.recover_connection(pending_connection).await.is_ok());
+
+        // Test 2: Valid active connection
+        let active_connection = Connection {
+            id: "test-active".to_string(),
+            initiator_id: "user1".to_string(),
+            recipient_id: Some("user2".to_string()),
+            initiator_label: "Friend".to_string(),
+            recipient_label: Some("My Friend".to_string()),
+            status: ConnectionStatus::Active,
+            created_at: Utc::now(),
+            connected_at: Some(Utc::now()),
+        };
+        assert!(manager.recover_connection(active_connection.clone()).await.is_ok());
+
+        // Test 3: Duplicate recovery attempt
+        assert!(matches!(
+            manager.recover_connection(active_connection).await,
+            Err(ConnectionError::AlreadyExists)
+        ));
+
+        // Test 4: Invalid active connection (missing recipient)
+        let invalid_active = Connection {
+            id: "test-invalid-active".to_string(),
+            initiator_id: "user1".to_string(),
+            recipient_id: None, // Missing recipient
+            initiator_label: "Friend".to_string(),
+            recipient_label: None,
+            status: ConnectionStatus::Active,
+            created_at: Utc::now(),
+            connected_at: Some(Utc::now()),
+        };
+        assert!(matches!(
+            manager.recover_connection(invalid_active).await,
+            Err(ConnectionError::InvalidRequest(_))
+        ));
+
+        // Test 5: Invalid active connection (missing connected_at)
+        let invalid_active_timing = Connection {
+            id: "test-invalid-timing".to_string(),
+            initiator_id: "user1".to_string(),
+            recipient_id: Some("user2".to_string()),
+            initiator_label: "Friend".to_string(),
+            recipient_label: Some("My Friend".to_string()),
+            status: ConnectionStatus::Active,
+            created_at: Utc::now(),
+            connected_at: None, // Missing connected_at
+        };
+        assert!(matches!(
+            manager.recover_connection(invalid_active_timing).await,
+            Err(ConnectionError::InvalidRequest(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_connection_recovery_persistence() {
+        let manager = InMemoryConnectionManager::new();
+        
+        // Create and recover a connection
+        let connection = Connection {
+            id: "test-persist".to_string(),
+            initiator_id: "user1".to_string(),
+            recipient_id: Some("user2".to_string()),
+            initiator_label: "Friend".to_string(),
+            recipient_label: Some("My Friend".to_string()),
+            status: ConnectionStatus::Active,
+            created_at: Utc::now(),
+            connected_at: Some(Utc::now()),
+        };
+        
+        // Recover the connection
+        manager.recover_connection(connection.clone()).await.unwrap();
+        
+        // Verify it can be retrieved
+        let recovered = manager.get_connection("test-persist").await.unwrap();
+        assert_eq!(recovered.id, connection.id);
+        assert_eq!(recovered.status, connection.status);
+        assert_eq!(recovered.initiator_id, connection.initiator_id);
+        assert_eq!(recovered.recipient_id, connection.recipient_id);
     }
 }
