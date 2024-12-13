@@ -79,8 +79,19 @@
     </div>
 
     <script>
+        const storageAvailable = isStorageAvailable();
+        const QUEUE_KEY = 'operationQueue';
+        const CONFIG = {
+            API_BASE: window.location.origin || 'http://localhost:3000',
+        };
         let currentUser = null;
         let currentConnectionLink = null;
+        let isOnline = navigator.onLine;
+
+        // Helper function for API URLs
+        function apiUrl(path) {
+            return `${CONFIG.API_BASE}${path}`;
+        }
 
         // Check for saved user data on page load
         window.addEventListener('load', () => {
@@ -98,7 +109,7 @@
             // Add this check function
             async function checkConnection() {
                 try {
-                    const response = await fetch(`http://localhost:3000/api/connections/check/${connectionId}`);
+                    const response = await fetch(apiUrl(`/api/connections/check/${connectionId}`));
                     
                     if (response.status === 404) {
                         document.getElementById('acceptConnection').innerHTML = `
@@ -138,41 +149,164 @@
             document.getElementById('userName').value = '';
         }
 
-        async function login() {
+        function isStorageAvailable() {
             try {
-                const userName = document.getElementById('userName').value;
-                if (!userName) {
-                    alert('Please enter your name');
-                    return;
-                }
-
-                const response = await fetch('http://localhost:3000/api/login', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name: userName })
-                });
-
-                currentUser = await response.json();
-                // Save user data to localStorage
-                localStorage.setItem('currentUser', JSON.stringify(currentUser));
-                
-                showLoggedInState();
-            } catch (error) {
-                console.error('Login error:', error);
-                alert('Error during login: ' + error.message);
+                localStorage.setItem('test', 'test');
+                localStorage.removeItem('test');
+                return true;
+            } catch (e) {
+                return false;
             }
         }
 
+        async function getStoredConnections() {
+            if (!storageAvailable) {
+                return [];
+            }
+            const stored = localStorage.getItem('connections');
+            return stored ? JSON.parse(stored) : [];
+        }
+
+        async function storeConnection(connection) {
+            if (!storageAvailable) {
+                console.warn('Local storage is not available');
+                return;
+            }
+            const connections = await getStoredConnections();
+            connections.push(connection);
+            localStorage.setItem('connections', JSON.stringify(connections));
+        }
+
+        async function removeConnection(connectionId) {
+            if (!storageAvailable) {
+                console.warn('Local storage is not available');
+                return;
+            }
+            let connections = await getStoredConnections();
+            connections = connections.filter(conn => conn.id !== connectionId);
+            localStorage.setItem('connections', JSON.stringify(connections));
+        }
+
+        async function queueOperation(operation) {
+            if (!storageAvailable) {
+                console.warn('Cannot queue operation: local storage not available');
+                return;
+            }
+            const queue = JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]');
+            queue.push({
+                ...operation,
+                timestamp: new Date().toISOString()
+            });
+            localStorage.setItem(QUEUE_KEY, JSON.stringify(queue));
+        }
+
+        async function processQueue() {
+            const queue = JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]');
+            if (queue.length === 0) return;
+
+            const newQueue = [];
+            
+            for (const operation of queue) {
+                try {
+                    switch (operation.type) {
+                        case 'create':
+                            await fetch(apiUrl('/api/connections/create'), {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(operation.userId)
+                            });
+                            break;
+                            
+                        case 'delete':
+                            await fetch(
+                                apiUrl(`/api/connections/delete/${operation.connectionId}`),
+                                {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' }
+                                }
+                            );
+                            break;
+                            
+                        case 'accept':
+                            await fetch(
+                                apiUrl(`/api/connections/accept/${operation.connectionId}`),
+                                {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify(operation.userId)
+                                }
+                            );
+                            break;
+                    }
+                } catch (error) {
+                    console.error(`Failed to process queued operation:`, operation, error);
+                    newQueue.push(operation);
+                }
+            }
+
+            localStorage.setItem(QUEUE_KEY, JSON.stringify(newQueue));
+            await refreshConnections();
+        }
+
+        window.addEventListener('online', async () => {
+            isOnline = true;
+            document.body.classList.remove('offline');
+            await processQueue();
+        });
+
+        window.addEventListener('offline', () => {
+            isOnline = false;
+            document.body.classList.add('offline');
+        });
+
         async function createConnection() {
             try {
-                const response = await fetch('http://localhost:3000/api/connections/create', {
+                if (!isOnline) {
+                    const connectionId = 'temp-' + Math.random().toString(36).substr(2, 9);
+                    
+                    const connection = {
+                        id: connectionId,
+                        initiator_id: currentUser.id,
+                        recipient_id: null,
+                        initiator_label: currentUser.name,
+                        recipient_label: null,
+                        status: "Pending",
+                        created_at: new Date().toISOString(),
+                        connected_at: null
+                    };
+                    
+                    await storeConnection(connection);
+                    await queueOperation({
+                        type: 'create',
+                        userId: currentUser.id,
+                        connectionId
+                    });
+
+                    await refreshConnections();
+                    alert('You are offline. The connection will be created when you reconnect.');
+                    return;
+                }
+
+                const response = await fetch(apiUrl('/api/connections/create'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(currentUser.id)
                 });
 
                 const data = await response.json();
-                currentConnectionLink = `http://localhost:3000/connect/${data.connection_id}`;
+                const connection = {
+                    id: data.connection_id,
+                    initiator_id: currentUser.id,
+                    initiator_label: currentUser.name,
+                    recipient_id: null,
+                    recipient_label: null,
+                    status: "Pending",
+                    created_at: new Date().toISOString(),
+                    connected_at: null
+                };
+
+                await storeConnection(connection);
+                currentConnectionLink = `${CONFIG.API_BASE}/connect/${data.connection_id}`;
                 
                 const linkSection = document.getElementById('connectionLinkSection');
                 linkSection.classList.remove('hidden');
@@ -183,7 +317,54 @@
                 await refreshConnections();
             } catch (error) {
                 console.error('Create connection error:', error);
-                alert('Error creating connection: ' + error.message);
+                if (!isOnline) {
+                    alert('You are offline. The connection will be created when you reconnect.');
+                } else {
+                    alert('Error creating connection: ' + error.message);
+                }
+            }
+        }
+
+        const style = document.createElement('style');
+        style.textContent = `
+            .offline .connection {
+                opacity: 0.7;
+            }
+            
+            .offline::after {
+                content: 'You are offline';
+                position: fixed;
+                bottom: 20px;
+                right: 20px;
+                background: #ff4444;
+                color: white;
+                padding: 10px 20px;
+                border-radius: 4px;
+            }
+        `;
+        document.head.appendChild(style);
+
+        async function login() {
+            try {
+                const userName = document.getElementById('userName').value;
+                if (!userName) {
+                    alert('Please enter your name');
+                    return;
+                }
+
+                const response = await fetch(apiUrl('/api/login'), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: userName })
+                });
+
+                currentUser = await response.json();
+                localStorage.setItem('currentUser', JSON.stringify(currentUser));
+                
+                showLoggedInState();
+            } catch (error) {
+                console.error('Login error:', error);
+                alert('Error during login: ' + error.message);
             }
         }
 
@@ -201,7 +382,7 @@
                     return;
                 }
 
-                const response = await fetch(`http://localhost:3000/api/connections/accept/${connectionId}`, {
+                const response = await fetch(apiUrl(`/api/connections/accept/${connectionId}`), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(currentUser.id)
@@ -223,40 +404,81 @@
 
         async function refreshConnections() {
             try {
+                // First get local connections
+                let connections = await getStoredConnections();
+                
+                // Then fetch any new ones from server
                 const response = await fetch(
-                    `http://localhost:3000/api/connections/list?user_id=${encodeURIComponent(currentUser.id)}`,
+                    apiUrl(`/api/connections/list?user_id=${encodeURIComponent(currentUser.id)}`),
                     {
                         method: 'GET',
                         headers: { 'Content-Type': 'application/json' }
                     }
                 );
 
-                const connections = await response.json();
-                const content = document.getElementById('connectionsContent');
+                const serverConnections = await response.json();
                 
-                if (connections.length === 0) {
-                    content.innerHTML = '<p>No connections yet</p>';
-                    return;
-                }
-
-                content.innerHTML = connections.map(conn => `
-                    <div class="connection">
-                        <p>Connected with: ${conn.recipient_id ? conn.recipient_label : conn.initiator_label}</p>
-                        <p>Status: ${conn.recipient_id ? 'Active' : 'Pending'}</p>
-                        <button onclick="deleteConnection('${conn.id}')" class="delete-btn">Delete</button>
-                    </div>
-                `).join('');
+                // Merge connections, preferring server versions
+                const mergedConnections = mergeConnections(connections, serverConnections);
+                
+                // Update local storage
+                localStorage.setItem('connections', JSON.stringify(mergedConnections));
+                
+                displayConnections(mergedConnections);
             } catch (error) {
                 console.error('Refresh connections error:', error);
-                document.getElementById('connectionsContent').innerHTML = 
-                    `<p class="error">Error loading connections: ${error.message}</p>`;
+                // Fall back to local connections only
+                const connections = await getStoredConnections();
+                displayConnections(connections);
             }
+        }
+
+        function mergeConnections(local, server) {
+            const merged = new Map();
+            
+            // Add local connections first
+            local.forEach(conn => merged.set(conn.id, conn));
+            
+            // Override with server connections
+            server.forEach(conn => merged.set(conn.id, conn));
+            
+            return Array.from(merged.values());
+        }
+
+        function displayConnections(connections) {
+            const content = document.getElementById('connectionsContent');
+            
+            if (connections.length === 0) {
+                content.innerHTML = '<p>No connections yet</p>';
+                return;
+            }
+
+            content.innerHTML = connections.map(conn => `
+                <div class="connection">
+                    <p>Connected with: ${conn.recipient_id ? conn.recipient_label : conn.initiator_label}</p>
+                    <p>Status: ${conn.recipient_id ? 'Active' : 'Pending'}</p>
+                    <button onclick="deleteConnection('${conn.id}')" class="delete-btn">Delete</button>
+                </div>
+            `).join('');
         }
 
         async function deleteConnection(connectionId) {
             try {
+                if (!isOnline) {
+                    await removeConnection(connectionId);
+                    await queueOperation({
+                        type: 'delete',
+                        connectionId,
+                        userId: currentUser.id
+                    });
+                    await refreshConnections();
+                    alert('You are offline. The deletion will be processed when you reconnect.');
+                    return;
+                }
+
+                // Online delete logic
                 const response = await fetch(
-                    `http://localhost:3000/api/connections/delete/${connectionId}`,
+                    apiUrl(`/api/connections/delete/${connectionId}`),
                     {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' }
@@ -267,10 +489,23 @@
                     throw new Error('Failed to delete connection');
                 }
 
+                await removeConnection(connectionId);
                 await refreshConnections();
             } catch (error) {
                 console.error('Delete connection error:', error);
-                alert('Error deleting connection: ' + error.message);
+                if (!isOnline) {
+                    // If offline, just remove locally and queue
+                    await removeConnection(connectionId);
+                    await queueOperation({
+                        type: 'delete',
+                        connectionId,
+                        userId: currentUser.id
+                    });
+                    await refreshConnections();
+                    alert('You are offline. The deletion will be processed when you reconnect.');
+                } else {
+                    alert('Error deleting connection: ' + error.message);
+                }
             }
         }
     </script>
