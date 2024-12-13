@@ -123,6 +123,11 @@ impl ConnectionManager for InMemoryConnectionManager {
             .cloned()
             .ok_or(ConnectionError::NotFound)
     }
+
+    async fn list_all_connections(&self) -> Result<Vec<Connection>, ConnectionError> {
+        let connections = self.connections.read().await;
+        Ok(connections.values().cloned().collect())
+    }
 }
 
 #[cfg(test)]

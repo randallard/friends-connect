@@ -26,4 +26,8 @@ pub trait ConnectionManager {
     async fn get_connection(&self, 
         connection_id: &str
     ) -> Result<Connection, ConnectionError>;
+
+
+    /// Lists all connections in the system
+    async fn list_all_connections(&self) -> Result<Vec<Connection>, ConnectionError>;
 }

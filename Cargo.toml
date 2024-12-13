@@ -10,7 +10,3 @@ thiserror = "1.0"
 async-trait = "0.1"
 tokio = { version = "1.0", features = ["sync", "macros", "rt-multi-thread"] }
 uuid = { version = "1.0", features = ["v4", "serde"] }
-
-[[example]]
-name = "web-demo"
-path = "examples/web-demo/src/main.rs"

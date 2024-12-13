@@ -54,6 +54,7 @@ async fn main() {
         .route("/api/connections/create", post(create_connection))
         .route("/api/connections/accept/:id", post(accept_connection))
         .route("/api/connections/list", get(list_connections))
+        .route("/api/connections/all", get(list_all_connections))
         .route("/connect/:id", get(handle_connection_link))
         .layer(cors)
         .with_state(app_state);
@@ -150,4 +151,14 @@ async fn handle_connection_link(
 ) -> Redirect {
     println!("Handling connection link: {}", connection_id);
     Redirect::to(&format!("/?connection={}", connection_id))
+}
+
+async fn list_all_connections(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<Connection>>, StatusCode> {
+    state.connection_manager
+        .list_all_connections()
+        .await
+        .map(Json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
