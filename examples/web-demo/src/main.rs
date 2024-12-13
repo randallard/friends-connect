@@ -51,10 +51,12 @@ async fn main() {
     let app = Router::new()
         .route("/", get(serve_home))
         .route("/api/login", post(login))
+        .route("/api/connections/delete/:id", post(delete_connection))
         .route("/api/connections/create", post(create_connection))
         .route("/api/connections/accept/:id", post(accept_connection))
         .route("/api/connections/list", get(list_connections))
         .route("/api/connections/all", get(list_all_connections))
+        .route("/api/connections/check/:id", get(check_connection))
         .route("/connect/:id", get(handle_connection_link))
         .layer(cors)
         .with_state(app_state);
@@ -113,6 +115,16 @@ async fn create_connection(
     result
 }
 
+async fn check_connection(
+    State(state): State<AppState>,
+    Path(connection_id): Path<String>,
+) -> Result<StatusCode, StatusCode> {
+    match state.connection_manager.get_request(&connection_id).await {
+        Ok(_) => Ok(StatusCode::OK),
+        Err(_) => Ok(StatusCode::NOT_FOUND)
+    }
+}
+
 async fn accept_connection(
     State(state): State<AppState>,
     Path(connection_id): Path<String>,
@@ -161,4 +173,15 @@ async fn list_all_connections(
         .await
         .map(Json)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn delete_connection(
+    State(state): State<AppState>,
+    Path(connection_id): Path<String>,
+) -> StatusCode {
+    println!("Deleting connection: {}", connection_id);
+    match state.connection_manager.delete_connection(&connection_id).await {
+        Ok(_) => StatusCode::OK,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
 }

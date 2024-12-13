@@ -26,6 +26,19 @@
             border: none;
             border-radius: 4px;
         }
+        .delete-btn {
+            background-color: #ff4444;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 0.25rem 0.5rem;
+            cursor: pointer;
+            margin-top: 0.5rem;
+        }
+
+        .delete-btn:hover {
+            background-color: #cc0000;
+        }
     </style>
 </head>
 <body>
@@ -82,8 +95,31 @@
         const urlParams = new URLSearchParams(window.location.search);
         const connectionId = urlParams.get('connection');
         if (connectionId) {
+            // Add this check function
+            async function checkConnection() {
+                try {
+                    const response = await fetch(`http://localhost:3000/api/connections/check/${connectionId}`);
+                    
+                    if (response.status === 404) {
+                        document.getElementById('acceptConnection').innerHTML = `
+                            <h2>Connection Not Found</h2>
+                            <p>This connection request no longer exists or has expired.</p>
+                        `;
+                    } else {
+                        document.getElementById('acceptConnection').classList.remove('hidden');
+                    }
+                } catch (error) {
+                    console.error('Check connection error:', error);
+                    document.getElementById('acceptConnection').innerHTML = `
+                        <h2>Error</h2>
+                        <p>There was an error checking this connection request.</p>
+                    `;
+                }
+            }
+
             document.getElementById('loginSection').classList.remove('hidden');
             document.getElementById('acceptConnection').classList.remove('hidden');
+            checkConnection(); // Call the check immediately
         }
 
         function showLoggedInState() {
@@ -127,7 +163,6 @@
             }
         }
 
-        // ... rest of the code remains the same ...
         async function createConnection() {
             try {
                 const response = await fetch('http://localhost:3000/api/connections/create', {
@@ -208,12 +243,34 @@
                     <div class="connection">
                         <p>Connected with: ${conn.recipient_id ? conn.recipient_label : conn.initiator_label}</p>
                         <p>Status: ${conn.recipient_id ? 'Active' : 'Pending'}</p>
+                        <button onclick="deleteConnection('${conn.id}')" class="delete-btn">Delete</button>
                     </div>
                 `).join('');
             } catch (error) {
                 console.error('Refresh connections error:', error);
                 document.getElementById('connectionsContent').innerHTML = 
                     `<p class="error">Error loading connections: ${error.message}</p>`;
+            }
+        }
+
+        async function deleteConnection(connectionId) {
+            try {
+                const response = await fetch(
+                    `http://localhost:3000/api/connections/delete/${connectionId}`,
+                    {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' }
+                    }
+                );
+
+                if (!response.ok) {
+                    throw new Error('Failed to delete connection');
+                }
+
+                await refreshConnections();
+            } catch (error) {
+                console.error('Delete connection error:', error);
+                alert('Error deleting connection: ' + error.message);
             }
         }
     </script>

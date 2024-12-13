@@ -128,6 +128,30 @@ impl ConnectionManager for InMemoryConnectionManager {
         let connections = self.connections.read().await;
         Ok(connections.values().cloned().collect())
     }
+
+    async fn delete_connection(
+        &self,
+        connection_id: &str
+    ) -> Result<(), ConnectionError> {
+        let mut connections = self.connections.write().await;
+        
+        if connections.remove(connection_id).is_some() {
+            Ok(())
+        } else {
+            Err(ConnectionError::NotFound)
+        }
+    }
+
+    async fn get_request(
+        &self,
+        connection_id: &str
+    ) -> Result<ConnectionRequest, ConnectionError> {
+        let requests = self.requests.read().await;
+        
+        requests.get(connection_id)
+            .cloned()
+            .ok_or(ConnectionError::NotFound)
+    }
 }
 
 #[cfg(test)]
