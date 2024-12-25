@@ -26,6 +26,7 @@ async fn join_connection(
 pub struct Server {
     pub address: String, 
     connections: web::Data<RwLock<HashMap<String, Connection>>>,
+    notifications: web::Data<RwLock<HashMap<String, Vec<String>>>>, 
 }
 
 impl Server {
@@ -33,19 +34,28 @@ impl Server {
         Server {
             address: address.to_string(),
             connections: web::Data::new(RwLock::new(HashMap::new())),
+            notifications: web::Data::new(RwLock::new(HashMap::new())),
         }
     }
 
     pub async fn run(&self) -> std::io::Result<()> {
         let address = self.address.clone(); 
         let connections = self.connections.clone();
+        let notifications = self.notifications.clone();
 
         HttpServer::new(move || {
             App::new()
                 .app_data(connections.clone())
+                .app_data(notifications.clone())
                 .route("/connections", web::post().to(create_connection))
                 .route("/connections/{id}/join", web::post().to(join_connection))
-                .route("/connections/link/{link_id}/join", web::post().to(join_connection_by_link))
+                .route(
+                    "/connections/link/{link_id}/join", 
+                    web::post().to(|link_id, req, connections, notifications| {
+                        join_connection_by_link(link_id, req, connections, notifications)
+                    })
+                )
+                .route("/players/{player_id}/notifications", web::get().to(get_player_notifications))        
                 .service(fs::Files::new("/", "./static")
                 .index_file("index.html"))
         })
@@ -77,6 +87,7 @@ async fn join_connection_by_link(
     link_id: web::Path<String>,
     join_req: web::Json<JoinRequest>,
     connections: web::Data<RwLock<HashMap<String, Connection>>>,
+    notifications: web::Data<RwLock<HashMap<String, Vec<String>>>>,
 ) -> HttpResponse {
     let mut conn_map = connections.write().unwrap();
     let link_id = link_id.into_inner();
@@ -94,12 +105,33 @@ async fn join_connection_by_link(
             }));
         }
         
+        // Store notification for first player
+        let first_player = &connection.players[0];
+        let mut notifications = notifications.write().unwrap();
+        notifications
+            .entry(first_player.clone())
+            .or_insert_with(Vec::new)
+            .push(format!("Player {} joined your connection", join_req.player_id));
+        
         connection.players.push(join_req.player_id.clone());
         HttpResponse::Ok().json(connection)
     } else {
         HttpResponse::NotFound().json(json!({
             "error": "Connection not found"
         }))
+    }
+}
+
+async fn get_player_notifications(
+    player_id: web::Path<String>,
+    notifications: web::Data<RwLock<HashMap<String, Vec<String>>>>
+) -> HttpResponse {
+    let player_id = player_id.into_inner();
+    let notifications = notifications.read().unwrap();
+    if let Some(player_notifications) = notifications.get(&player_id) {
+        HttpResponse::Ok().json(player_notifications)
+    } else {
+        HttpResponse::NotFound().finish()
     }
 }
 
@@ -121,6 +153,57 @@ mod tests {
         });
         
         server_address
+    }
+
+    #[actix_web::test]
+    async fn test_second_player_join_notifies_first_player() {
+        // Arrange
+        let address = spawn_app();
+        let client = reqwest::Client::new();
+        
+        // Create connection with player1
+        let create_resp = client
+            .post(&format!("http://{}/connections", address))
+            .json(&json!({
+                "player_id": "player1"
+            }))
+            .send()
+            .await
+            .unwrap();
+        
+        let connection: Connection = create_resp.json().await.unwrap();
+        
+        // We need a way to check for notifications
+        // Let's have player1 poll an endpoint
+        let notifications_resp = client
+            .get(&format!("http://{}/players/player1/notifications", address))
+            .send()
+            .await
+            .unwrap();
+            
+        assert_eq!(notifications_resp.status(), 404); // No notifications yet
+        
+        // Act - Join with player2
+        let join_resp = client
+            .post(&format!("http://{}/connections/link/{}/join", address, connection.link_id))
+            .json(&json!({
+                "player_id": "player2"
+            }))
+            .send()
+            .await
+            .unwrap();
+        
+        // Assert - Check that player1 has a notification
+        let notifications_resp = client
+            .get(&format!("http://{}/players/player1/notifications", address))
+            .send()
+            .await
+            .unwrap();
+            
+        assert_eq!(notifications_resp.status(), 200);
+        let notifications: Vec<String> = notifications_resp.json().await.unwrap();
+        assert_eq!(notifications.len(), 1);
+        assert!(notifications[0].contains("player2")); // Notification mentions player2
     }
 
     #[actix_web::test]
