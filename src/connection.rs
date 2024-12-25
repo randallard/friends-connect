@@ -2,6 +2,14 @@ use serde::{Serialize, Deserialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Message {
+    pub id: String,
+    pub from: String,
+    pub content: String,
+    pub timestamp: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ConnectionStatus {
     Pending,
@@ -40,7 +48,7 @@ impl Connection {
         if self.players.len() >= 2 {
             return false;
         }
-        
+
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()

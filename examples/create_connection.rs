@@ -33,9 +33,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .send()
         .await?;
 
-    println!("Join Status: {}", join_response.status());
-    let joined = join_response.json::<serde_json::Value>().await?;
-    println!("Joined Connection: {}", serde_json::to_string_pretty(&joined)?);
-
-    Ok(())
+        println!("Join Status: {}", join_response.status());
+        let joined = join_response.json::<serde_json::Value>().await?;
+        println!("Joined Connection: {}", serde_json::to_string_pretty(&joined)?);
+    
+        // Player 1 sends a message
+        println!("\nPlayer 1 sending message...");
+        let p1_message = client
+            .post(&format!("http://localhost:8080/connections/{}/messages", connection["id"].as_str().unwrap()))
+            .json(&json!({
+                "player_id": "player1",
+                "content": "Hi player2! Welcome to the game!"
+            }))
+            .send()
+            .await?;
+    
+        println!("Player 1 Message Status: {}", p1_message.status());
+        println!("Player 2's notifications:");
+        let p2_notifications = client
+            .get("http://localhost:8080/players/player2/notifications")
+            .send()
+            .await?
+            .json::<serde_json::Value>()
+            .await?;
+        println!("{}", serde_json::to_string_pretty(&p2_notifications)?);
+    
+        // Player 2 sends a message back
+        println!("\nPlayer 2 sending message...");
+        let p2_message = client
+            .post(&format!("http://localhost:8080/connections/{}/messages", connection["id"].as_str().unwrap()))
+            .json(&json!({
+                "player_id": "player2",
+                "content": "Thanks player1! Ready to play!"
+            }))
+            .send()
+            .await?;
+    
+        println!("Player 2 Message Status: {}", p2_message.status());
+        println!("Player 1's notifications:");
+        let p1_notifications = client
+            .get("http://localhost:8080/players/player1/notifications")
+            .send()
+            .await?
+            .json::<serde_json::Value>()
+            .await?;
+        println!("{}", serde_json::to_string_pretty(&p1_notifications)?);
+    
+        Ok(())
 }

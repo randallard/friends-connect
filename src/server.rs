@@ -5,7 +5,14 @@ use std::sync::RwLock;
 use std::collections::HashMap;
 use serde_json::json;
 
-use crate::connection::{Connection, ConnectionStatus};
+use crate::connection::{Connection, ConnectionStatus, Message};
+use std::time::SystemTime;
+
+#[derive(serde::Deserialize)]
+struct SendMessageRequest {
+    player_id: String,
+    content: String,
+}
 
 #[derive(serde::Deserialize)]
 struct JoinRequest {
@@ -56,6 +63,7 @@ impl Server {
                     })
                 )
                 .route("/players/{player_id}/notifications", web::get().to(get_player_notifications))        
+                .route("/connections/{id}/messages", web::post().to(send_message))
                 .service(fs::Files::new("/", "./static")
                 .index_file("index.html"))
         })
@@ -78,6 +86,7 @@ async fn create_connection(
     
     // Store both id and link_id mappings
     let mut conn_map = connections.write().unwrap();
+    conn_map.insert(connection.id.clone(), connection.clone());
     conn_map.insert(connection.link_id.clone(), connection.clone());
     
     HttpResponse::Ok().json(connection)
@@ -89,37 +98,53 @@ async fn join_connection_by_link(
     connections: web::Data<RwLock<HashMap<String, Connection>>>,
     notifications: web::Data<RwLock<HashMap<String, Vec<String>>>>,
 ) -> HttpResponse {
-    let mut conn_map = connections.write().unwrap();
     let link_id = link_id.into_inner();
     
-    if let Some(connection) = conn_map.get_mut(&link_id) {
-        if connection.players.len() != 1 {
-            return HttpResponse::BadRequest().json(json!({
-                "error": "Connection already has maximum players"
+    // First get the connection and validate
+    let connection = {
+        let conn_map = connections.read().unwrap();
+        if let Some(conn) = conn_map.get(&link_id) {
+            if conn.players.len() != 1 {
+                return HttpResponse::BadRequest().json(json!({
+                    "error": "Connection already has maximum players"
+                }));
+            }
+            
+            if conn.players.contains(&join_req.player_id) {
+                return HttpResponse::BadRequest().json(json!({
+                    "error": "Player already in connection"
+                }));
+            }
+            conn.clone()
+        } else {
+            return HttpResponse::NotFound().json(json!({
+                "error": "Connection not found"
             }));
         }
-        
-        if connection.players.contains(&join_req.player_id) {
-            return HttpResponse::BadRequest().json(json!({
-                "error": "Player already in connection"
-            }));
-        }
-        
-        // Store notification for first player
+    };
+    
+    // Store notification for first player
+    {
         let first_player = &connection.players[0];
         let mut notifications = notifications.write().unwrap();
         notifications
             .entry(first_player.clone())
             .or_insert_with(Vec::new)
             .push(format!("Player {} joined your connection", join_req.player_id));
-        
-        connection.players.push(join_req.player_id.clone());
-        HttpResponse::Ok().json(connection)
-    } else {
-        HttpResponse::NotFound().json(json!({
-            "error": "Connection not found"
-        }))
     }
+    
+    // Update connection with new player
+    let mut updated_connection = connection.clone();
+    updated_connection.players.push(join_req.player_id.clone());
+    
+    // Update both mappings
+    {
+        let mut conn_map = connections.write().unwrap();
+        conn_map.insert(connection.id.clone(), updated_connection.clone());
+        conn_map.insert(link_id, updated_connection.clone());
+    }
+    
+    HttpResponse::Ok().json(updated_connection)
 }
 
 async fn get_player_notifications(
@@ -132,6 +157,53 @@ async fn get_player_notifications(
         HttpResponse::Ok().json(player_notifications)
     } else {
         HttpResponse::NotFound().finish()
+    }
+}
+
+async fn send_message(
+    connection_id: web::Path<String>,
+    message_req: web::Json<SendMessageRequest>,
+    connections: web::Data<RwLock<HashMap<String, Connection>>>,
+    notifications: web::Data<RwLock<HashMap<String, Vec<String>>>>,
+) -> HttpResponse {
+    let conn_map = connections.read().unwrap();
+    let connection_id = connection_id.into_inner();
+    
+    if let Some(connection) = conn_map.get(&connection_id) {
+        // Verify sender is in the connection
+        if !connection.players.contains(&message_req.player_id) {
+            return HttpResponse::BadRequest().json(json!({
+                "error": "Player not in this connection"
+            }));
+        }
+        
+        // Create the message
+        let message = Message {
+            id: uuid::Uuid::new_v4().to_string(),
+            from: message_req.player_id.clone(),
+            content: message_req.content.clone(),
+            timestamp: SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64,
+        };
+        
+        // Notify other players
+        let mut notifications = notifications.write().unwrap();
+        for player in &connection.players {
+            if player != &message_req.player_id {
+                notifications
+                    .entry(player.clone())
+                    .or_insert_with(Vec::new)
+                    .push(format!("Message from {}: {}", message_req.player_id, message_req.content));
+            }
+        }
+        
+        HttpResponse::Ok().json(message)
+    } else {
+        HttpResponse::NotFound().json(json!({
+            "error": "Connection not found"
+        }))
     }
 }
 
@@ -319,6 +391,59 @@ mod tests {
         assert_eq!(response.status(), 200);
         let body = response.text().await.unwrap();
         assert!(body.contains("Hello World!"));
+    }
+
+    #[actix_web::test]
+    async fn test_send_message_in_connection() {
+        // Arrange
+        let address = spawn_app();
+        let client = reqwest::Client::new();
+        
+        // Create connection with player1
+        let create_resp = client
+            .post(&format!("http://{}/connections", address))
+            .json(&json!({
+                "player_id": "player1"
+            }))
+            .send()
+            .await
+            .unwrap();
+        
+        let connection: Connection = create_resp.json().await.unwrap();
+        
+        // Join with player2
+        let _join_resp = client
+            .post(&format!("http://{}/connections/link/{}/join", address, connection.link_id))
+            .json(&json!({
+                "player_id": "player2"
+            }))
+            .send()
+            .await
+            .unwrap();
+
+        // Act - Send message from player1
+        let message_resp = client
+            .post(&format!("http://{}/connections/{}/messages", address, connection.id))
+            .json(&json!({
+                "player_id": "player1",
+                "content": "Hello player2!"
+            }))
+            .send()
+            .await
+            .unwrap();
+            
+        // Assert
+        assert_eq!(message_resp.status(), 200);
+        
+        // Check that player2 got the message in their notifications
+        let notifications_resp = client
+            .get(&format!("http://{}/players/player2/notifications", address))
+            .send()
+            .await
+            .unwrap();
+            
+        let notifications: Vec<String> = notifications_resp.json().await.unwrap();
+        assert!(notifications.iter().any(|n| n.contains("Hello player2!")));
     }
 
     #[test]
