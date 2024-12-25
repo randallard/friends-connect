@@ -2,7 +2,9 @@ use friends_connect::Server;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    let server = Server::new("127.0.0.1:8080");
-    println!("Server running at http://127.0.0.1:8080");
+    let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
+    let address = format!("0.0.0.0:{}", port);
+    let server = Server::new(&address);
+    println!("Server running at http://{}", address);
     server.run().await
 }
