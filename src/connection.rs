@@ -37,6 +37,10 @@ impl Connection {
     }
  
     pub fn is_expired(&self) -> bool {
+        if self.players.len() >= 2 {
+            return false;
+        }
+        
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -50,6 +54,18 @@ impl Connection {
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn test_connection_does_not_expire_with_two_players() {
+        let mut connection = Connection::new("player1".to_string());
+        connection.players.push("player2".to_string());
+        
+        // Set expires_at to past time
+        connection.expires_at = 0;
+        
+        // Should not be expired since it has two players
+        assert!(!connection.is_expired());
+    }
 
 
     #[test]
