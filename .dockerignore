@@ -1,11 +1,28 @@
-# flyctl launch added from .gitignore
-target
-examples\web-demo\target
-examples\cli\target
+# Git
+.git
+.gitignore
+.github/
 
-# Added by cargo
-#
-# already existing elements were commented out
+# Docker
+.docker
+.dockerignore
+Dockerfile*
 
-#/target
-fly.toml
+# Rust
+target/
+debug/
+**/*.rs.bk
+*.pdb
+
+# Development
+.env
+*.log
+*.sh
+*.md
+.vscode/
+tests/
+examples/
+
+# Kubernetes
+k8s/
+*.yaml
