@@ -62,7 +62,7 @@ jobs:
       - name: Configure OCI CLI
         run: |
           mkdir -p ~/.oci
-          echo "${{ secrets.OCI_CONFIG }}" | sed 's/\\/\//g' > ~/.oci/config
+          echo "${{ secrets.OCI_CONFIG }}" > ~/.oci/config
           echo "${{ secrets.OCI_PRIVATE_KEY }}" > ~/.oci/key.pem
           chmod 600 ~/.oci/config ~/.oci/key.pem        
 
