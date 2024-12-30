@@ -79,3 +79,16 @@ jobs:
         run: |
           kubectl set image deployment/friends-connect friends-connect=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.meta.outputs.digest }}
           kubectl rollout status deployment/friends-connect
+
+      - name: Debug deployment
+        if: failure()
+        run: |
+          echo "Checking pod status..."
+          kubectl get pods -l app=friends-connect
+          echo "\nChecking pod details..."
+          kubectl describe pods -l app=friends-connect
+          echo "\nChecking pod logs..."
+          for pod in $(kubectl get pods -l app=friends-connect -o name); do
+            echo "\nLogs for $pod:"
+            kubectl logs $pod --tail=50
+          done          

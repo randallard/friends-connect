@@ -31,5 +31,13 @@ spec:
           httpGet:
             path: /
             port: 8080
-          initialDelaySeconds: 5
+          initialDelaySeconds: 10  # Increased from 5 to give more startup time
           periodSeconds: 10
+          timeoutSeconds: 3        # Added timeout
+          failureThreshold: 3      # Added failure threshold
+        livenessProbe:            # Added liveness probe
+          httpGet:
+            path: /
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 20
