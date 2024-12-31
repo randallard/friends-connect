@@ -1,3 +1,38 @@
+deployment to oracle cloud kubernetes is working 
+
+set up local html page to create connection between friends
+
+allow friends to push to your bluetooth device
+
+---
+
+I got 
+
+```PS C:\Users\ryankhetlyr> kubectl cluster-info
+WARNING: Permissions on C:\Users\ryankhetlyr\.oci\config are too open.
+The following users  / groups have permissions to the file and should not: It's a lion!.
+To fix this please try executing the following command:
+oci setup repair-file-permissions --file C:\Users\ryankhetlyr\.oci\config
+Alternatively to hide this warning, you may set an environment variable; Windows and PowerShell commands follow:
+SET OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True
+$Env:OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING="True"
+
+WARNING: Permissions on C:\Users\ryankhetlyr\.oci\oci_api_key.pem are too open.
+The following users  / groups have permissions to the file and should not: It's a lion!.
+To fix this please try executing the following command:
+oci setup repair-file-permissions --file C:\Users\ryankhetlyr\.oci\oci_api_key.pem
+Alternatively to hide this warning, you may set an environment variable; Windows and PowerShell commands follow:
+SET OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True
+$Env:OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING="True"
+
+Kubernetes control plane is running at https://146.235.212.7:6443
+CoreDNS is running at https://146.235.212.7:6443/api/v1/namespaces/kube-system/services/kube-dns:dns/proxy
+```
+
+---
+
+
+
 The manifest validation tests are passing. Now we need to:
 
 1. Configure connectivity to your Oracle Cloud cluster
