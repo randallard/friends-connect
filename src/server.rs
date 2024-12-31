@@ -4,6 +4,7 @@ use std::net::TcpListener;
 use std::sync::RwLock;
 use std::collections::HashMap;
 use serde_json::json;
+use actix_cors::Cors;
 
 use crate::connection::{Connection, ConnectionStatus, Message};
 use std::time::SystemTime;
@@ -51,7 +52,9 @@ impl Server {
         let notifications = self.notifications.clone();
 
         HttpServer::new(move || {
+            let cors = Cors::permissive(); 
             App::new()
+                .wrap(cors)  // Add this line to enable CORS
                 .app_data(connections.clone())
                 .app_data(notifications.clone())
                 .route("/connections", web::post().to(create_connection))
