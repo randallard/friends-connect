@@ -149,33 +149,30 @@
             messageArea.scrollTop = messageArea.scrollHeight;
         }
 
-        let lastProcessedTime = 0;  // Add this with the other variables at the top
-
         async function pollNotifications() {
             try {
                 const response = await fetch(`${API_BASE}/players/${playerId}/notifications`);
                 if (response.ok) {
                     const notifications = await response.json();
-                    const currentTime = Date.now();
-                    
-                    notifications.forEach(notification => {
-                        // Changed this condition to better detect join notifications
-                        if (notification.includes('Player') && notification.includes('joined')) {
-                            // Show chat area and notify user
-                            document.getElementById('setupArea').classList.add('hidden');
-                            document.getElementById('chatArea').classList.remove('hidden');
-                            appendMessage('System', 'Friend joined the chat!');
-                        } else if (notification.includes('Message from')) {
-                            if (currentTime > lastProcessedTime) {
+                    if (notifications.length > 0) {
+                        notifications.forEach(notification => {
+                            if (notification.includes('Player') && notification.includes('joined')) {
+                                document.getElementById('setupArea').classList.add('hidden');
+                                document.getElementById('chatArea').classList.remove('hidden');
+                                appendMessage('System', 'Friend joined the chat!');
+                            } else if (notification.includes('Message from')) {
                                 const match = notification.match(/Message from (.*?): (.*)/);
                                 if (match) {
                                     appendMessage(match[1], match[2]);
                                 }
                             }
-                        }
-                    });
-                    
-                    lastProcessedTime = currentTime;
+                        });
+                        
+                        // Acknowledge notifications after processing
+                        await fetch(`${API_BASE}/players/${playerId}/notifications/ack`, {
+                            method: 'POST'
+                        });
+                    }
                 }
             } catch (error) {
                 console.error('Error polling notifications:', error);
