@@ -66,6 +66,7 @@ impl Server {
                     })
                 )
                 .route("/players/{player_id}/notifications", web::get().to(get_player_notifications))        
+                .route("/players/{player_id}/notifications/ack", web::post().to(acknowledge_notifications))
                 .route("/connections/{id}/messages", web::post().to(send_message))
                 .service(fs::Files::new("/", "./static")
                 .index_file("index.html"))
@@ -159,8 +160,18 @@ async fn get_player_notifications(
     if let Some(player_notifications) = notifications.get(&player_id) {
         HttpResponse::Ok().json(player_notifications)
     } else {
-        HttpResponse::NotFound().finish()
+        HttpResponse::Ok().json(Vec::<String>::new())  // Return empty array instead of 404
     }
+}
+
+async fn acknowledge_notifications(
+    player_id: web::Path<String>,
+    notifications: web::Data<RwLock<HashMap<String, Vec<String>>>>
+) -> HttpResponse {
+    let player_id = player_id.into_inner();
+    let mut notifications = notifications.write().unwrap();
+    notifications.remove(&player_id);
+    HttpResponse::Ok().json(json!({"status": "ok"}))  // Return JSON instead of empty response
 }
 
 async fn send_message(
@@ -250,13 +261,17 @@ mod tests {
         
         // We need a way to check for notifications
         // Let's have player1 poll an endpoint
-        let notifications_resp = client
-            .get(&format!("http://{}/players/player1/notifications", address))
-            .send()
-            .await
-            .unwrap();
-            
-        assert_eq!(notifications_resp.status(), 404); // No notifications yet
+        // Check that player1 has no notifications initially
+        let initial_notifications: Vec<String> = client
+        .get(&format!("http://{}/players/player1/notifications", address))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+        assert!(initial_notifications.is_empty()); // No notifications yet
         
         // Act - Join with player2
         let join_resp = client
@@ -453,5 +468,79 @@ mod tests {
     fn test_server_new() {
         let server = Server::new("127.0.0.1:8080");
         assert_eq!(server.address, "127.0.0.1:8080");
+    }
+
+    #[actix_web::test]
+    async fn test_notifications_are_cleared_after_acknowledgment() {
+        // Arrange
+        let address = spawn_app();
+        let client = reqwest::Client::new();
+        
+        // Create connection with player1
+        let create_resp = client
+            .post(&format!("http://{}/connections", address))
+            .json(&json!({
+                "player_id": "player1"
+            }))
+            .send()
+            .await
+            .unwrap();
+        
+        let connection: Connection = create_resp.json().await.unwrap();
+        
+        // Join with player2 and send a message to generate notifications
+        client
+            .post(&format!("http://{}/connections/link/{}/join", address, connection.link_id))
+            .json(&json!({
+                "player_id": "player2"
+            }))
+            .send()
+            .await
+            .unwrap();
+    
+        client
+            .post(&format!("http://{}/connections/{}/messages", address, connection.id))
+            .json(&json!({
+                "player_id": "player1",
+                "content": "Hello player2!"
+            }))
+            .send()
+            .await
+            .unwrap();
+            
+        // Verify initial notifications exist
+        let initial_notifications: Vec<String> = client
+            .get(&format!("http://{}/players/player2/notifications", address))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        
+        assert!(!initial_notifications.is_empty());
+        
+        // Acknowledge notifications
+        let ack_resp = client
+            .post(&format!("http://{}/players/player2/notifications/ack", address))
+            .send()
+            .await
+            .unwrap();
+            
+        assert_eq!(ack_resp.status(), 200);
+        let ack_json: serde_json::Value = ack_resp.json().await.unwrap();
+        assert_eq!(ack_json["status"], "ok");
+        
+        // Verify notifications are cleared
+        let final_notifications: Vec<String> = client
+            .get(&format!("http://{}/players/player2/notifications", address))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+            
+        assert!(final_notifications.is_empty());
     }
 }
