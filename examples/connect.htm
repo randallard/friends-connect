@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Friends Connect</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/uuid/8.3.2/uuid.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .hidden {
+            display: none;
+        }
+        #messageArea {
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-top: 20px;
+            min-height: 200px;
+        }
+        #notifications {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f0f0f0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Friends Connect</h1>
+    
+    <!-- Initial Connection Setup -->
+    <div id="setupArea">
+        <div id="newConnection">
+            <h2>Create New Connection</h2>
+            <button onclick="createConnection()">Create Connection</button>
+        </div>
+
+        <div id="joinConnection">
+            <h2>Join Connection</h2>
+            <input type="text" id="linkInput" placeholder="Enter connection link">
+            <button onclick="joinConnection()">Join</button>
+        </div>
+    </div>
+
+    <!-- Chat Area (initially hidden) -->
+    <div id="chatArea" class="hidden">
+        <h2>Chat</h2>
+        <div id="messageArea"></div>
+        <input type="text" id="messageInput" placeholder="Type your message">
+        <button onclick="sendMessage()">Send</button>
+    </div>
+
+    <!-- Notifications Area -->
+    <div id="notifications"></div>
+
+    <script>
+        const API_BASE = 'http://146.235.192.228';
+        let playerId = uuid.v4();
+        let currentConnectionId = null;
+        let pollInterval = null;
+
+        async function createConnection() {
+            try {
+                const response = await fetch(`${API_BASE}/connections`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ player_id: playerId })
+                });
+                
+                const connection = await response.json();
+                currentConnectionId = connection.id;
+                
+                // Show both the link and the chat area for the creator
+                const linkUrl = `${window.location.href}?link=${connection.link_id}`;
+                document.getElementById('notifications').innerHTML = `
+                    Share this link with your friend:<br>
+                    <input type="text" value="${linkUrl}" readonly style="width: 100%">
+                `;
+                
+                // Show chat area immediately for connection creator
+                document.getElementById('setupArea').classList.add('hidden');
+                document.getElementById('chatArea').classList.remove('hidden');
+                appendMessage('System', 'Waiting for friend to join...');
+                
+                startPolling();
+            } catch (error) {
+                console.error('Error creating connection:', error);
+                document.getElementById('notifications').innerHTML = `Error: ${error.message}`;
+            }
+        }
+        async function joinConnection() {
+            const linkId = document.getElementById('linkInput').value;
+            try {
+                const response = await fetch(`${API_BASE}/connections/link/${linkId}/join`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ player_id: playerId })
+                });
+                
+                const connection = await response.json();
+                currentConnectionId = connection.id;
+                
+                document.getElementById('setupArea').classList.add('hidden');
+                document.getElementById('chatArea').classList.remove('hidden');
+                
+                startPolling();
+            } catch (error) {
+                console.error('Error joining connection:', error);
+                document.getElementById('notifications').innerHTML = `Error: ${error.message}`;
+            }
+        }
+
+        async function sendMessage() {
+            const content = document.getElementById('messageInput').value;
+            if (!content.trim()) return;
+            
+            try {
+                const response = await fetch(`${API_BASE}/connections/${currentConnectionId}/messages`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        player_id: playerId,
+                        content: content
+                    })
+                });
+                
+                if (response.ok) {
+                    document.getElementById('messageInput').value = '';
+                    appendMessage('You', content);
+                }
+            } catch (error) {
+                console.error('Error sending message:', error);
+                document.getElementById('notifications').innerHTML = `Error: ${error.message}`;
+            }
+        }
+
+        function appendMessage(from, content) {
+            const messageArea = document.getElementById('messageArea');
+            messageArea.innerHTML += `<p><strong>${from}:</strong> ${content}</p>`;
+            messageArea.scrollTop = messageArea.scrollHeight;
+        }
+
+        let lastProcessedTime = 0;  // Add this with the other variables at the top
+
+        async function pollNotifications() {
+            try {
+                const response = await fetch(`${API_BASE}/players/${playerId}/notifications`);
+                if (response.ok) {
+                    const notifications = await response.json();
+                    const currentTime = Date.now();
+                    
+                    notifications.forEach(notification => {
+                        // Changed this condition to better detect join notifications
+                        if (notification.includes('Player') && notification.includes('joined')) {
+                            // Show chat area and notify user
+                            document.getElementById('setupArea').classList.add('hidden');
+                            document.getElementById('chatArea').classList.remove('hidden');
+                            appendMessage('System', 'Friend joined the chat!');
+                        } else if (notification.includes('Message from')) {
+                            if (currentTime > lastProcessedTime) {
+                                const match = notification.match(/Message from (.*?): (.*)/);
+                                if (match) {
+                                    appendMessage(match[1], match[2]);
+                                }
+                            }
+                        }
+                    });
+                    
+                    lastProcessedTime = currentTime;
+                }
+            } catch (error) {
+                console.error('Error polling notifications:', error);
+            }
+        }
+
+        function startPolling() {
+            if (!pollInterval) {
+                pollInterval = setInterval(pollNotifications, 1000);
+            }
+        }
+
+        // Check for link in URL when page loads
+        window.onload = () => {
+            const urlParams = new URLSearchParams(window.location.search);
+            const linkId = urlParams.get('link');
+            if (linkId) {
+                document.getElementById('linkInput').value = linkId;
+                joinConnection();
+            }
+        };
+    </script>
+</body>
+</html>
