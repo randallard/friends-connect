@@ -40,7 +40,7 @@ impl Connection {
             players: vec![player_id],
             created_at: now,
             status: ConnectionStatus::Pending,
-            expires_at: now + 600, // Expires in 10 minutes
+            expires_at: now + 604800, // Expires in 1 week
         }
     }
  
