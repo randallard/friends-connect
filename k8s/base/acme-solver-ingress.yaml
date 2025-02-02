@@ -1,0 +1,21 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: acme-solver
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/priority: "2000"
+spec:
+  rules:
+  - host: 146.235.192.228.nip.io
+    http:
+      paths:
+      - path: /.well-known/acme-challenge/(.*)
+        pathType: ImplementationSpecific
+        backend:
+          service:
+            name: cm-acme-http-solver-rhzhn
+            port:
+              number: 8089

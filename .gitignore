@@ -1,4 +1,5 @@
 /target
 /examples/web-demo/target
+/examples/leptos_hello/target
 /examples/cli/target
 Cargo.lock

@@ -57,6 +57,7 @@ impl Server {
                 .wrap(cors)  // Add this line to enable CORS
                 .app_data(connections.clone())
                 .app_data(notifications.clone())
+                .route("/.well-known/acme-challenge/{token}", web::get().to(acme_challenge))
                 .route("/connections", web::post().to(create_connection))
                 .route("/connections/{id}/join", web::post().to(join_connection))
                 .route(
@@ -75,6 +76,14 @@ impl Server {
         .run()
         .await
     }
+}
+
+async fn acme_challenge(token: web::Path<String>) -> HttpResponse {
+    // In a real challenge, Let's Encrypt would verify this content
+    // For our test, we'll just return the token
+    HttpResponse::Ok()
+        .content_type("text/plain")
+        .body(token.to_string())
 }
 
 async fn create_connection(
@@ -468,6 +477,23 @@ mod tests {
     fn test_server_new() {
         let server = Server::new("127.0.0.1:8080");
         assert_eq!(server.address, "127.0.0.1:8080");
+    }
+
+    #[actix_web::test]
+    async fn test_acme_challenge_path_accessible() {
+        // Arrange
+        let address = spawn_app();
+        let client = reqwest::Client::new();
+        
+        // Act - Try to access a mock ACME challenge file
+        let response = client
+            .get(&format!("http://{}/.well-known/acme-challenge/test-token", address))
+            .send()
+            .await
+            .unwrap();
+            
+        // Assert
+        assert_eq!(response.status(), 200);
     }
 
     #[actix_web::test]

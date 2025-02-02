@@ -1,0 +1,25 @@
+# app-ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: friends-connect
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/priority: "100"
+spec:
+  tls:
+  - hosts:
+    - 146.235.192.228.nip.io
+    secretName: friends-connect-tls
+  rules:
+  - host: 146.235.192.228.nip.io
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: friends-connect
+            port:
+              number: 80
