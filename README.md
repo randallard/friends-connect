@@ -29,19 +29,19 @@ Better example repos:
    - Download and run [rustup-init.exe](https://rustup.rs/)
    - Follow the installation prompts
    - Open a new terminal and verify installation:
-     ```bash
+     ```powershell
      rustc --version
      cargo --version
      ```
 
 2. Clone the repository:
-   ```bash
+   ```powershell
    git clone <repository-url>
    cd friends-connect
    ```
 
 3. Build and run locally:
-   ```bash
+   ```powershell
    cargo build
    cargo run
    ```
@@ -137,11 +137,6 @@ curl -X POST http://localhost:8080/connections/{CONNECTION_ID}/messages \
 
 MIT
 
-## testing the leptos example
-cd to examples/leptos_hello  
-```powershell
-wasm-pack test --chrome --headless
-```
 ## Other Documentation
 
 - [Development Plan](docs/development-plan.md) - Overall roadmap and development strategy
