@@ -1,0 +1,8 @@
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "link-arg=/NODEFAULTLIB:libcmt"]
+
+[env]
+# Set environment variables for building native dependencies
+OPENSSL_NO_VENDOR = "1"
+OPENSSL_STATIC = "1"
+OPENSSL_DIR = "C:/Program Files/OpenSSL-Win64"

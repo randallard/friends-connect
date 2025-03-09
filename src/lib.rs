@@ -4,7 +4,9 @@ use std::net::TcpListener;
 use serde_json::json;
 
 pub mod connection;
-pub mod server;  
+pub mod server; 
+pub mod websocket; 
 
 pub use connection::{Connection, ConnectionStatus};
 pub use server::Server;
+pub use websocket::setup_ws_routes;

@@ -1,4 +1,8 @@
 use actix_web::{web, App, HttpServer, HttpResponse};
+use actix::{Actor, StreamHandler};
+use actix_web_actors::ws;
+use std::collections::HashMap;
+use std::env;
 use actix_files as fs;
 use std::net::TcpListener;
 use std::sync::RwLock;
@@ -35,14 +39,30 @@ pub struct Server {
     pub address: String, 
     connections: web::Data<RwLock<HashMap<String, Connection>>>,
     notifications: web::Data<RwLock<HashMap<String, Vec<String>>>>, 
+    redpanda_config: web::Data<RedpandaConfig>,
 }
 
 impl Server {
     pub fn new(address: &str) -> Self {
+        // Load Redpanda configuration from environment
+        let bootstrap_servers = env::var("REDPANDA_BOOTSTRAP_SERVERS")
+            .unwrap_or_else(|_| "localhost:9092".to_string());
+        let username = env::var("REDPANDA_USERNAME")
+            .unwrap_or_else(|_| "".to_string());
+        let password = env::var("REDPANDA_PASSWORD")
+            .unwrap_or_else(|_| "".to_string());
+            
+        let redpanda_config = RedpandaConfig {
+            bootstrap_servers,
+            username,
+            password,
+        };
+        
         Server {
             address: address.to_string(),
             connections: web::Data::new(RwLock::new(HashMap::new())),
             notifications: web::Data::new(RwLock::new(HashMap::new())),
+            redpanda_config: web::Data::new(redpanda_config),
         }
     }
 
@@ -50,6 +70,12 @@ impl Server {
         let address = self.address.clone(); 
         let connections = self.connections.clone();
         let notifications = self.notifications.clone();
+        let redpanda_config = self.redpanda_config.clone();
+        
+        setup_notification_consumer(
+            redpanda_config.get_ref().clone(),
+            notifications.clone(),
+        ).await;
 
         HttpServer::new(move || {
             let cors = Cors::permissive(); 
@@ -57,6 +83,7 @@ impl Server {
                 .wrap(cors)  // Add this line to enable CORS
                 .app_data(connections.clone())
                 .app_data(notifications.clone())
+                .app_data(redpanda_config.clone())
                 .route("/connections", web::post().to(create_connection))
                 .route("/connections/{id}/join", web::post().to(join_connection))
                 .route(
@@ -68,6 +95,7 @@ impl Server {
                 .route("/players/{player_id}/notifications", web::get().to(get_player_notifications))        
                 .route("/players/{player_id}/notifications/ack", web::post().to(acknowledge_notifications))
                 .route("/connections/{id}/messages", web::post().to(send_message))
+                .route("/ws", web::get().to(ws_route))
                 .service(fs::Files::new("/", "./static")
                 .index_file("index.html"))
         })
