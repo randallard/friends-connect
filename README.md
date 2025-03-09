@@ -2,6 +2,8 @@
 
 A real-time connection service that enables players to establish connections and exchange messages.
 
+Testing the flow:  Draft verify in the verify directory - it's not perfect but you'll get the idea
+
 Better example repos:
 - [ble-messenger](https://github.com/randallard/ble-messenger)
 - [hello-friends-connect](https://github.com/randallard/hello-friends-connect)
