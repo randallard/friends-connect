@@ -35,12 +35,12 @@ impl Connection {
             .as_secs() as i64;
             
         Connection {
-            id: uuid::Uuid::new_v4().to_string(),
-            link_id: uuid::Uuid::new_v4().to_string(),
+            id: Uuid::new_v4().to_string(),
+            link_id: Uuid::new_v4().to_string(),
             players: vec![player_id],
             created_at: now,
             status: ConnectionStatus::Pending,
-            expires_at: now + 604800, // Expires in 1 week
+            expires_at: now + 604800, // Expires in 1 week (604800 seconds)
         }
     }
  
@@ -88,8 +88,8 @@ mod tests {
         assert!(connection.created_at > now - 1);
         assert!(connection.created_at <= now);
 
-        // Expires timestamp should be 10 minutes after creation
-        assert_eq!(connection.expires_at, connection.created_at + 600);
+        // Expires timestamp should be 1 week after creation
+        assert_eq!(connection.expires_at, connection.created_at + 604800);
     }
 
     #[test]
@@ -118,8 +118,8 @@ mod tests {
         let connection = Connection::new("player1".to_string());
         
         // Test that both id and link_id are valid UUIDs
-        assert!(uuid::Uuid::parse_str(&connection.id).is_ok());
-        assert!(uuid::Uuid::parse_str(&connection.link_id).is_ok());
+        assert!(Uuid::parse_str(&connection.id).is_ok());
+        assert!(Uuid::parse_str(&connection.link_id).is_ok());
     }
 
     #[test]

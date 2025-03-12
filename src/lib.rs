@@ -9,4 +9,4 @@ pub mod websocket;
 
 pub use connection::{Connection, ConnectionStatus};
 pub use server::Server;
-pub use websocket::setup_ws_routes;
+pub use websocket::{ws_route, RedpandaConfig, setup_notification_consumer};

@@ -2,6 +2,8 @@
 
 A real-time connection service that enables players to establish connections and exchange messages.
 
+I've only been successful building this on Windows Subsystem for Linux, not Windows standard
+
 Better example repos:
 - [ble-messenger](https://github.com/randallard/ble-messenger)
 - [hello-friends-connect](https://github.com/randallard/hello-friends-connect)

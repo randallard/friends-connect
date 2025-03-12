@@ -1,4 +1,4 @@
-use actix::{Actor, StreamHandler};
+use actix::{Actor, StreamHandler, AsyncContext, ActorContext};
 use actix_web::{web, Error, HttpRequest, HttpResponse};
 use actix_web_actors::ws;
 use rdkafka::producer::{FutureProducer, FutureRecord};
@@ -6,6 +6,8 @@ use rdkafka::ClientConfig;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
+use std::collections::HashMap;
+use std::sync::RwLock;
 
 // WebSocket message types
 #[derive(Serialize, Deserialize)]
@@ -184,14 +186,14 @@ impl WebSocketConnection {
 
 // Redpanda configuration
 #[derive(Clone)]
-struct RedpandaConfig {
-    bootstrap_servers: String,
-    username: String,
-    password: String,
+pub struct RedpandaConfig {
+    pub bootstrap_servers: String,
+    pub username: String,
+    pub password: String,
 }
 
 // WebSocket connection handler
-async fn ws_route(
+pub async fn ws_route(
     req: HttpRequest,
     stream: web::Payload,
     query: web::Query<HashMap<String, String>>,
@@ -210,7 +212,7 @@ async fn ws_route(
 }
 
 // Function to set up Redpanda consumer for notifications
-async fn setup_notification_consumer(
+pub async fn setup_notification_consumer(
     redpanda_config: RedpandaConfig,
     notifications: web::Data<RwLock<HashMap<String, Vec<String>>>>,
 ) {

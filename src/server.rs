@@ -6,11 +6,14 @@ use std::env;
 use actix_files as fs;
 use std::net::TcpListener;
 use std::sync::RwLock;
-use std::collections::HashMap;
 use serde_json::json;
 use actix_cors::Cors;
+use rdkafka::producer::{FutureProducer, FutureRecord};
+use rdkafka::ClientConfig;
+use std::time::Duration;
 
 use crate::connection::{Connection, ConnectionStatus, Message};
+use crate::websocket::{RedpandaConfig, ws_route, setup_notification_consumer};
 use std::time::SystemTime;
 
 #[derive(serde::Deserialize)]
@@ -40,6 +43,31 @@ pub struct Server {
     connections: web::Data<RwLock<HashMap<String, Connection>>>,
     notifications: web::Data<RwLock<HashMap<String, Vec<String>>>>, 
     redpanda_config: web::Data<RedpandaConfig>,
+    producer: Option<web::Data<FutureProducer>>,
+}
+
+// Helper function to send messages to Redpanda
+fn send_to_redpanda(
+    producer: &FutureProducer,
+    topic: &str,
+    key: &str,
+    payload: &str,
+) {
+    let producer = producer.clone();
+    let topic = topic.to_owned();
+    let key = key.to_owned();
+    let payload = payload.to_owned();
+
+    actix_web::rt::spawn(async move {
+        let record = FutureRecord::to(&topic)
+            .key(&key)
+            .payload(&payload);
+
+        match producer.send(record, Duration::from_secs(1)).await {
+            Ok(_) => (),
+            Err((err, _)) => eprintln!("Error sending to Redpanda: {:?}", err),
+        }
+    });
 }
 
 impl Server {
@@ -53,9 +81,32 @@ impl Server {
             .unwrap_or_else(|_| "".to_string());
             
         let redpanda_config = RedpandaConfig {
-            bootstrap_servers,
-            username,
-            password,
+            bootstrap_servers: bootstrap_servers.clone(),
+            username: username.clone(),
+            password: password.clone(),
+        };
+        
+        // Create Redpanda producer
+        let producer = if !bootstrap_servers.is_empty() {
+            let mut config = ClientConfig::new();
+            config.set("bootstrap.servers", &bootstrap_servers);
+            
+            if !username.is_empty() && !password.is_empty() {
+                config.set("sasl.mechanism", "SCRAM-SHA-256");
+                config.set("security.protocol", "SASL_SSL");
+                config.set("sasl.username", &username);
+                config.set("sasl.password", &password);
+            }
+            
+            match config.create() {
+                Ok(producer) => Some(web::Data::new(producer)),
+                Err(err) => {
+                    eprintln!("Failed to create Redpanda producer: {:?}", err);
+                    None
+                }
+            }
+        } else {
+            None
         };
         
         Server {
@@ -63,6 +114,7 @@ impl Server {
             connections: web::Data::new(RwLock::new(HashMap::new())),
             notifications: web::Data::new(RwLock::new(HashMap::new())),
             redpanda_config: web::Data::new(redpanda_config),
+            producer,
         }
     }
 
@@ -71,6 +123,7 @@ impl Server {
         let connections = self.connections.clone();
         let notifications = self.notifications.clone();
         let redpanda_config = self.redpanda_config.clone();
+        let producer = self.producer.clone();
         
         setup_notification_consumer(
             redpanda_config.get_ref().clone(),
@@ -79,17 +132,23 @@ impl Server {
 
         HttpServer::new(move || {
             let cors = Cors::permissive(); 
-            App::new()
-                .wrap(cors)  // Add this line to enable CORS
+            let mut app = App::new()
+                .wrap(cors)
                 .app_data(connections.clone())
                 .app_data(notifications.clone())
-                .app_data(redpanda_config.clone())
-                .route("/connections", web::post().to(create_connection))
+                .app_data(redpanda_config.clone());
+                
+            // Add producer if available
+            if let Some(prod) = producer.clone() {
+                app = app.app_data(prod.clone());
+            }
+                
+            app.route("/connections", web::post().to(create_connection))
                 .route("/connections/{id}/join", web::post().to(join_connection))
                 .route(
                     "/connections/link/{link_id}/join", 
-                    web::post().to(|link_id, req, connections, notifications| {
-                        join_connection_by_link(link_id, req, connections, notifications)
+                    web::post().to(|link_id, req, connections, notifications, producer| {
+                        join_connection_by_link(link_id, req, connections, notifications, producer)
                     })
                 )
                 .route("/players/{player_id}/notifications", web::get().to(get_player_notifications))        
@@ -108,18 +167,39 @@ impl Server {
 async fn create_connection(
     player_id: web::Json<serde_json::Value>,
     connections: web::Data<RwLock<HashMap<String, Connection>>>,
+    producer: Option<web::Data<FutureProducer>>,
 ) -> HttpResponse {
     let player_id = player_id.get("player_id")
         .and_then(|id| id.as_str())
         .unwrap_or("")
         .to_string();
         
-    let connection = Connection::new(player_id);
+    let connection = Connection::new(player_id.clone());
     
     // Store both id and link_id mappings
     let mut conn_map = connections.write().unwrap();
     conn_map.insert(connection.id.clone(), connection.clone());
     conn_map.insert(connection.link_id.clone(), connection.clone());
+    
+    // Publish to Redpanda if producer is available
+    if let Some(producer) = producer {
+        let event = json!({
+            "event": "connection_created",
+            "connection_id": connection.id,
+            "player_id": player_id,
+            "timestamp": SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        });
+        
+        send_to_redpanda(
+            producer.get_ref(),
+            "connection-events",
+            &connection.id,
+            &event.to_string(),
+        );
+    }
     
     HttpResponse::Ok().json(connection)
 }
@@ -129,6 +209,7 @@ async fn join_connection_by_link(
     join_req: web::Json<JoinRequest>,
     connections: web::Data<RwLock<HashMap<String, Connection>>>,
     notifications: web::Data<RwLock<HashMap<String, Vec<String>>>>,
+    producer: Option<web::Data<FutureProducer>>,
 ) -> HttpResponse {
     let link_id = link_id.into_inner();
     
@@ -176,6 +257,26 @@ async fn join_connection_by_link(
         conn_map.insert(link_id, updated_connection.clone());
     }
     
+    // Publish to Redpanda if producer is available
+    if let Some(producer) = producer {
+        let event = json!({
+            "event": "player_joined",
+            "connection_id": connection.id,
+            "player_id": join_req.player_id,
+            "timestamp": SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        });
+        
+        send_to_redpanda(
+            producer.get_ref(),
+            "connection-events",
+            &connection.id,
+            &event.to_string(),
+        );
+    }
+    
     HttpResponse::Ok().json(updated_connection)
 }
 
@@ -194,12 +295,39 @@ async fn get_player_notifications(
 
 async fn acknowledge_notifications(
     player_id: web::Path<String>,
-    notifications: web::Data<RwLock<HashMap<String, Vec<String>>>>
+    notifications: web::Data<RwLock<HashMap<String, Vec<String>>>>,
+    producer: Option<web::Data<FutureProducer>>,
 ) -> HttpResponse {
     let player_id = player_id.into_inner();
     let mut notifications = notifications.write().unwrap();
+    
+    // Check if there were notifications before removing
+    let had_notifications = notifications.get(&player_id).map_or(false, |n| !n.is_empty());
+    
     notifications.remove(&player_id);
-    HttpResponse::Ok().json(json!({"status": "ok"}))  // Return JSON instead of empty response
+    
+    // Publish to Redpanda if producer is available and there were notifications
+    if let Some(producer) = producer {
+        if had_notifications {
+            let event = json!({
+                "event": "notifications_acknowledged",
+                "player_id": player_id,
+                "timestamp": SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+            });
+            
+            send_to_redpanda(
+                producer.get_ref(),
+                "connection-events",
+                &player_id,
+                &event.to_string(),
+            );
+        }
+    }
+    
+    HttpResponse::Ok().json(json!({"status": "ok"}))
 }
 
 async fn send_message(
@@ -207,6 +335,7 @@ async fn send_message(
     message_req: web::Json<SendMessageRequest>,
     connections: web::Data<RwLock<HashMap<String, Connection>>>,
     notifications: web::Data<RwLock<HashMap<String, Vec<String>>>>,
+    producer: Option<web::Data<FutureProducer>>,
 ) -> HttpResponse {
     let conn_map = connections.read().unwrap();
     let connection_id = connection_id.into_inner();
@@ -239,6 +368,25 @@ async fn send_message(
                     .or_insert_with(Vec::new)
                     .push(format!("Message from {}: {}", message_req.player_id, message_req.content));
             }
+        }
+        
+        // Publish to Redpanda if producer is available
+        if let Some(producer) = producer {
+            let event = json!({
+                "event": "message_sent",
+                "connection_id": connection_id,
+                "message_id": message.id,
+                "player_id": message_req.player_id,
+                "content": message_req.content,
+                "timestamp": message.timestamp,
+            });
+            
+            send_to_redpanda(
+                producer.get_ref(),
+                "connection-messages",
+                &connection_id,
+                &event.to_string(),
+            );
         }
         
         HttpResponse::Ok().json(message)
