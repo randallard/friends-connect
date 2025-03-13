@@ -1,8 +1,35 @@
 #!/bin/bash
 
+# Try different IP options for connecting to the server
+SERVER_PORT="8081"
+
+# Option 1: The specific IP you found
 SERVER_IP="172.25.223.120"
-SERVER_PORT="8080"
+#SERVER_IP="0.0.0.0"
 BASE_URL="http://${SERVER_IP}:${SERVER_PORT}"
+
+# Option 2: Try localhost if server is on the same machine
+# Uncomment the next line and comment out the SERVER_IP and BASE_URL above if needed
+# BASE_URL="http://localhost:${SERVER_PORT}"
+
+# Check server availability
+echo "Checking server availability at ${BASE_URL}..."
+# First try a verbose check to see what's happening
+curl -v --connect-timeout 5 --max-time 10 -X GET "${BASE_URL}" 2>&1 | grep -i "connected"
+
+# Then do the actual check for the script logic
+if ! curl -s --connect-timeout 5 --max-time 10 -X GET "${BASE_URL}" &>/dev/null; then
+    echo "Error: Cannot connect to the server at ${BASE_URL}"
+    echo "Please ensure the server is running and accessible, then try again."
+    echo ""
+    echo "Troubleshooting tips:"
+    echo "1. Check that the server is running (Server running at http://0.0.0.0:8081)"
+    echo "2. Try changing BASE_URL to use localhost if running on same machine"
+    echo "3. Check Windows Firewall settings for WSL connections"
+    echo "4. Verify server port is correctly exposed from WSL to Windows"
+    exit 1
+fi
+echo "Server is available."
 
 # Generate a random GUID for the player
 PLAYER_ID=$(uuidgen | tr -d '-')

@@ -45,17 +45,24 @@ impl Connection {
     }
  
     pub fn is_expired(&self) -> bool {
-        if self.players.len() >= 2 {
+        // If already marked as expired, return true
+        if self.status == ConnectionStatus::Expired {
+            return true;
+        }
+        
+        // If status is Active (has 2 players), it doesn't expire
+        if self.status == ConnectionStatus::Active {
             return false;
         }
 
+        // Check expiration time for Pending connections
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64;
             
         self.expires_at <= now
-    }   
+    }  
 }
 
 #[cfg(test)]

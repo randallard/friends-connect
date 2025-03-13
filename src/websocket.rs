@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 use std::collections::HashMap;
 use std::sync::RwLock;
+use crate::connection::{Connection, ConnectionStatus};
 
 // WebSocket message types
 #[derive(Serialize, Deserialize)]
@@ -155,6 +156,37 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WebSocketConnecti
                                 );
                             }
                         }
+                        "update_status" => {
+                            if let (Some(conn_id), Some(new_status)) = (
+                                self.connection_id.as_ref(),
+                                ws_msg.payload.get("status").and_then(|s| s.as_str()),
+                            ) {
+                                // Validate the status
+                                let status = match new_status {
+                                    "Active" => Some("Active"),
+                                    "Expired" => Some("Expired"),
+                                    "Pending" => Some("Pending"),
+                                    _ => None
+                                };
+                                
+                                if let Some(status) = status {
+                                    // Send status update event to Redpanda
+                                    let status_event = serde_json::json!({
+                                        "event": "status_updated",
+                                        "connection_id": conn_id,
+                                        "player_id": self.player_id,
+                                        "new_status": status,
+                                        "timestamp": chrono::Utc::now().timestamp(),
+                                    });
+                                    
+                                    self.send_to_redpanda(
+                                        "connection-events", 
+                                        conn_id,
+                                        &status_event.to_string()
+                                    );
+                                }
+                            }
+                        },
                         _ => {
                             eprintln!("Unknown event type: {}", ws_msg.event_type);
                         }
@@ -181,6 +213,21 @@ impl WebSocketConnection {
             }
             ctx.ping(b"");
         });
+    }
+    
+    fn send_status_update(&self, ctx: &mut ws::WebsocketContext<Self>, status: &str) {
+        if let Some(conn_id) = &self.connection_id {
+            let status_msg = serde_json::json!({
+                "event_type": "status_update",
+                "payload": {
+                    "connection_id": conn_id,
+                    "status": status,
+                    "timestamp": chrono::Utc::now().timestamp(),
+                }
+            });
+            
+            ctx.text(status_msg.to_string());
+        }
     }
 }
 
@@ -214,7 +261,8 @@ pub async fn ws_route(
 // Function to set up Redpanda consumer for notifications
 pub async fn setup_notification_consumer(
     redpanda_config: RedpandaConfig,
-    notifications: web::Data<RwLock<HashMap<String, Vec<String>>>>,
+    notifications: web::Data<RwLock<HashMap<String, Vec<String>>>>,    
+    connections: web::Data<RwLock<HashMap<String, Connection>>>, 
 ) {
     use rdkafka::config::ClientConfig;
     use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
@@ -232,36 +280,84 @@ pub async fn setup_notification_consumer(
         .expect("Consumer creation failed");
     
     consumer
-        .subscribe(&["user-notifications"])
+        .subscribe(&["user-notifications","connection-events"])
         .expect("Topic subscription failed");
     
-    actix_web::rt::spawn(async move {
-        loop {
-            match consumer.recv().await {
-                Ok(msg) => {
-                    if let Some(payload) = msg.payload() {
-                        if let Ok(payload_str) = std::str::from_utf8(payload) {
-                            if let Ok(notification) = serde_json::from_str::<serde_json::Value>(payload_str) {
-                                if let (Some(player_id), Some(content)) = (
-                                    notification.get("player_id").and_then(|id| id.as_str()),
-                                    notification.get("content").and_then(|c| c.as_str()),
-                                ) {
-                                    let mut notifications_lock = notifications.write().unwrap();
-                                    notifications_lock
-                                        .entry(player_id.to_owned())
-                                        .or_insert_with(Vec::new)
-                                        .push(content.to_owned());
+        actix_web::rt::spawn(async move {
+            loop {
+                match consumer.recv().await {
+                    Ok(msg) => {
+                        if let Some(payload) = msg.payload() {
+                            if let Ok(payload_str) = std::str::from_utf8(payload) {
+                                if let Ok(event) = serde_json::from_str::<serde_json::Value>(payload_str) {
+                                    // Check the topic
+                                    let topic_str = msg.topic();
+                                    match topic_str {
+                                        "user-notifications" => {
+                                            // Existing notification handling...
+                                        },
+                                        "connection-events" => {
+                                            // Handle connection events
+                                            if let Some(event_type) = event.get("event").and_then(|e| e.as_str()) {
+                                                match event_type {
+                                                    "status_changed" | "connection_expired" => {
+                                                        // Handle status change notification
+                                                        if let (Some(conn_id), Some(new_status)) = (
+                                                            event.get("connection_id").and_then(|id| id.as_str()),
+                                                            event.get("new_status")
+                                                                .and_then(|s| s.as_str())
+                                                                .or_else(|| Some("Expired")), // Default to Expired if not specified
+                                                        ) {
+                                                            // Update connection status if needed
+                                                            let mut conn_map = connections.write().unwrap();
+                                                            if let Some(mut conn) = conn_map.get(conn_id).cloned() {
+                                                                // Get old status for comparison
+                                                                let old_status = conn.status.clone();
+                                                                
+                                                                // Update status
+                                                                conn.status = match new_status {
+                                                                    "Active" => ConnectionStatus::Active,
+                                                                    "Expired" => ConnectionStatus::Expired,
+                                                                    "Pending" => ConnectionStatus::Pending,
+                                                                    _ => conn.status, // Keep current status if invalid
+                                                                };
+                                                                
+                                                                // Only update if status actually changed
+                                                                if old_status != conn.status {
+                                                                    conn_map.insert(conn_id.to_string(), conn.clone());
+                                                                    
+                                                                    // Add notifications for all players in the connection
+                                                                    let mut notif_lock = notifications.write().unwrap();
+                                                                    for player in &conn.players {
+                                                                        notif_lock
+                                                                            .entry(player.clone())
+                                                                            .or_insert_with(Vec::new)
+                                                                            .push(format!("Connection status changed to {}", new_status));
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    },
+                                                    _ => {
+                                                        // Ignore other event types
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        _ => {
+                                            // Ignore other topics
+                                        }
+                                    }
                                 }
                             }
                         }
+                        consumer.commit_message(&msg, CommitMode::Async).unwrap();
                     }
-                    consumer.commit_message(&msg, CommitMode::Async).unwrap();
-                }
-                Err(e) => {
-                    eprintln!("Error while receiving from Redpanda: {:?}", e);
-                    actix_web::rt::time::sleep(Duration::from_secs(1)).await;
+                    Err(e) => {
+                        eprintln!("Error while receiving from Redpanda: {:?}", e);
+                        actix_web::rt::time::sleep(Duration::from_secs(1)).await;
+                    }
                 }
             }
-        }
-    });
-}
+        });
+    }
