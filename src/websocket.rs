@@ -57,7 +57,7 @@ impl WebSocketConnection {
                 .key(&key)
                 .payload(&payload);
 
-            match producer.send(record, Duration::from_secs(1)).await {
+            match producer.send(record, Duration::from_secs(10)).await {
                 Ok(_) => (),
                 Err((err, _)) => eprintln!("Error sending to Redpanda: {:?}", err),
             }

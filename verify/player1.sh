@@ -1,7 +1,7 @@
 #!/bin/bash
 
 SERVER_IP="172.25.223.120"
-SERVER_PORT="8080"
+SERVER_PORT="8081"
 BASE_URL="http://${SERVER_IP}:${SERVER_PORT}"
 
 # Generate a random GUID for the player
