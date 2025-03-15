@@ -270,9 +270,13 @@ async fn create_connection(
         );
     }
     
-    HttpResponse::Ok().json(connection)
+    // Include WebSocket URL in the response
+    let websocket_url = format!("/ws?player_id={}", player_id);
+    HttpResponse::Ok().json(json!({
+        "connection": connection,
+        "websocket_url": websocket_url
+    }))
 }
-
 async fn join_connection_by_link(
     link_id: web::Path<String>,
     join_req: web::Json<JoinRequest>,
@@ -308,17 +312,63 @@ async fn join_connection_by_link(
     // Store notification for first player
     {
         let first_player = &connection.players[0];
+        let notification_msg = format!("Player {} joined your connection", join_req.player_id);
+        
+        // Store in local memory
         let mut notifications = notifications.write().unwrap();
         notifications
             .entry(first_player.clone())
             .or_insert_with(Vec::new)
-            .push(format!("Player {} joined your connection", join_req.player_id));
+            .push(notification_msg.clone());
+        
+        // Also send to user-notifications topic in Redpanda
+        if let Some(producer) = &producer {
+            let notification_event = json!({
+                "event": "notification",
+                "player_id": first_player,
+                "message": notification_msg,
+                "connection_id": connection.id,
+                "timestamp": SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+            });
+            
+            send_to_redpanda(
+                producer.get_ref(),
+                "user-notifications",
+                first_player,
+                &notification_event.to_string(),
+            );
+            
+            // Try to send notification via WebSocket as well
+            if let Some(ws) = crate::websocket::get_websocket_for_player(first_player) {
+                let ws_msg = json!({
+                    "event_type": "notification",
+                    "payload": {
+                        "message": notification_msg,
+                        "connection_id": connection.id,
+                        "timestamp": SystemTime::now()
+                            .duration_since(SystemTime::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs(),
+                    }
+                });
+                
+                ws.do_send(crate::websocket::WebSocketMessage(ws_msg.to_string()));
+                println!("Sent notification to player {} via WebSocket", first_player);
+            }
+        }
     }
     
     // Update connection with new player
     let mut updated_connection = connection.clone();
     updated_connection.players.push(join_req.player_id.clone());
+    let status_changed = updated_connection.status != ConnectionStatus::Active;
     updated_connection.status = ConnectionStatus::Active;
+
+    println!("Changing connection {} status from {:?} to Active with players: {:?}", 
+        connection.id, connection.status, updated_connection.players);
     
     // Update both mappings
     {
@@ -345,23 +395,6 @@ async fn join_connection_by_link(
             &connection.id,
             &event.to_string(),
         );
-
-        let join_event = json!({
-            "event": "player_joined",
-            "connection_id": connection.id,
-            "player_id": join_req.player_id,
-            "timestamp": SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-        });
-        
-        send_to_redpanda(
-            producer.get_ref(),
-            "connection-events",
-            &connection.id,
-            &join_event.to_string(),
-        );
         
         // Add new event for status change
         let status_event = json!({
@@ -383,7 +416,12 @@ async fn join_connection_by_link(
         );
     }
     
-    HttpResponse::Ok().json(updated_connection)
+    // Include WebSocket URL in the response
+    let websocket_url = format!("/ws?player_id={}", join_req.player_id);
+    HttpResponse::Ok().json(json!({
+        "connection": updated_connection,
+        "websocket_url": websocket_url
+    }))
 }
 
 async fn get_player_notifications(
@@ -410,13 +448,14 @@ async fn acknowledge_notifications(
     // Check if there were notifications before removing
     let had_notifications = notifications.get(&player_id).map_or(false, |n| !n.is_empty());
     
+    // Remove notifications locally
     notifications.remove(&player_id);
     
     // Publish to Redpanda if producer is available and there were notifications
     if let Some(producer) = producer {
         if had_notifications {
             let event = json!({
-                "event": "notifications_acknowledged",
+                "event": "notifications_cleared",
                 "player_id": player_id,
                 "timestamp": SystemTime::now()
                     .duration_since(SystemTime::UNIX_EPOCH)
@@ -426,7 +465,7 @@ async fn acknowledge_notifications(
             
             send_to_redpanda(
                 producer.get_ref(),
-                "connection-events",
+                "user-notifications",  // Changed from connection-events to user-notifications
                 &player_id,
                 &event.to_string(),
             );
@@ -465,19 +504,42 @@ async fn send_message(
                 .as_secs() as i64,
         };
         
-        // Notify other players
+        // Store notifications locally and publish to Redpanda for other instances
         let mut notifications = notifications.write().unwrap();
         for player in &connection.players {
             if player != &message_req.player_id {
+                // Create notification message
+                let notification_msg = format!("Message from {}: {}", message_req.player_id, message_req.content);
+                
+                // Store locally
                 notifications
                     .entry(player.clone())
                     .or_insert_with(Vec::new)
-                    .push(format!("Message from {}: {}", message_req.player_id, message_req.content));
+                    .push(notification_msg.clone());
+                
+                // Publish to Redpanda if producer is available
+                if let Some(producer) = &producer {
+                    let notification_event = json!({
+                        "event": "notification",
+                        "player_id": player,
+                        "message": notification_msg,
+                        "connection_id": connection_id,
+                        "message_id": message.id,
+                        "timestamp": message.timestamp,
+                    });
+                    
+                    send_to_redpanda(
+                        producer.get_ref(),
+                        "user-notifications",  // Using user-notifications topic
+                        player,                // Key by recipient player ID
+                        &notification_event.to_string(),
+                    );
+                }
             }
         }
         
-        // Publish to Redpanda if producer is available
-        if let Some(producer) = producer {
+        // Also publish message event to connection-messages topic for other purposes
+        if let Some(producer) = &producer {
             let event = json!({
                 "event": "message_sent",
                 "connection_id": connection_id,
