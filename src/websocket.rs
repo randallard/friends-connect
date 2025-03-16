@@ -19,7 +19,7 @@ struct WsMessage {
 
 #[derive(actix::Message)]
 #[rtype(result = "()")]
-struct WebSocketMessage(String);
+pub struct WebSocketMessage(pub String);
 
 // Handler for WebSocketMessage
 impl actix::Handler<WebSocketMessage> for WebSocketConnection {
@@ -30,7 +30,7 @@ impl actix::Handler<WebSocketMessage> for WebSocketConnection {
     }
 }
 
-struct WebSocketConnection {
+pub struct WebSocketConnection {
     id: String,
     player_id: String,
     // Replace single connection_id with a set of connection_ids
@@ -421,7 +421,7 @@ impl WebSocketConnection {
     }
     
     fn send_status_update(&self, ctx: &mut ws::WebsocketContext<Self>, status: &str) {
-        if let Some(conn_id) = &self.connection_id {
+        if let Some(conn_id) = &self.connection_ids.iter().next() {
             let status_msg = serde_json::json!({
                 "event_type": "status_update",
                 "payload": {
@@ -462,7 +462,7 @@ fn unregister_websocket(player_id: &str) {
     println!("Total active WebSockets: {}", connections.len());
 }
 
-fn get_websocket_for_player(player_id: &str) -> Option<actix::Addr<WebSocketConnection>> {
+pub fn get_websocket_for_player(player_id: &str) -> Option<actix::Addr<WebSocketConnection>> {
     let connections = WS_CONNECTIONS.read().unwrap();
     connections.get(player_id).cloned()
 }
