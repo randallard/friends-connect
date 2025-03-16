@@ -341,9 +341,10 @@ async fn join_connection_by_link(
                 &notification_event.to_string(),
             );
             
-            // Try to send notification via WebSocket as well
             if let Some(ws) = crate::websocket::get_websocket_for_player(first_player) {
-                let ws_msg = json!({
+                // Send the notification message
+                let notification_msg = format!("Player {} joined your connection", join_req.player_id);
+                let ws_notification = json!({
                     "event_type": "notification",
                     "payload": {
                         "message": notification_msg,
@@ -355,8 +356,24 @@ async fn join_connection_by_link(
                     }
                 });
                 
-                ws.do_send(crate::websocket::WebSocketMessage(ws_msg.to_string()));
-                println!("Sent notification to player {} via WebSocket", first_player);
+                ws.do_send(crate::websocket::WebSocketMessage(ws_notification.to_string()));
+                
+                // Also send a direct connection status update
+                let ws_status = json!({
+                    "event_type": "connection_updated",
+                    "payload": {
+                        "type": "joined",
+                        "connection_id": connection.id,
+                        "status": "Active",
+                        "timestamp": SystemTime::now()
+                            .duration_since(SystemTime::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs(),
+                    }
+                });
+                
+                ws.do_send(crate::websocket::WebSocketMessage(ws_status.to_string()));
+                println!("Sent both notification and status update to player {} via WebSocket", first_player);
             }
         }
     }

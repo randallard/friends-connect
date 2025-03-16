@@ -583,33 +583,55 @@ pub async fn setup_notification_consumer(
                                         
                                         if let Some(event_type) = event.get("event").and_then(|e| e.as_str()) {
                                             match event_type {
+
                                                 "notification" => {
-                                                    // Handle new notification
-                                                    if let (Some(player_id), Some(message)) = (
-                                                        event.get("player_id").and_then(|id| id.as_str()),
-                                                        event.get("message").and_then(|m| m.as_str()),
-                                                    ) {
-                                                        // Add to in-memory notifications
-                                                        let mut notif_lock = notifications.write().unwrap();
-                                                        notif_lock
-                                                            .entry(player_id.to_string())
-                                                            .or_insert_with(Vec::new)
-                                                            .push(message.to_string());
+                                                    // Handle incoming notification
+                                                    if let Some(player_id) = event.get("player_id").and_then(|id| id.as_str()) {
+                                                        if let Some(message) = event.get("message").and_then(|m| m.as_str()) {
+                                                            // Get connection ID if present
+                                                            let conn_id = event.get("connection_id").and_then(|id| id.as_str());
                                                             
-                                                        println!("Added notification for player {}: {}", player_id, message);
-                                                        
-                                                        // Also forward to WebSocket if connected
-                                                        if let Some(ws) = get_websocket_for_player(player_id) {
-                                                            let ws_msg = serde_json::json!({
-                                                                "event_type": "notification",
-                                                                "payload": {
-                                                                    "message": message,
-                                                                    "timestamp": chrono::Utc::now().timestamp(),
+                                                            // Add to in-memory notifications
+                                                            let mut notif_lock = notifications.write().unwrap();
+                                                            notif_lock
+                                                                .entry(player_id.to_string())
+                                                                .or_default()
+                                                                .push(message.to_string());
+                                                                
+                                                            println!("Added notification for player {}: {}", player_id, message);
+                                                            
+                                                            // Forward to WebSocket if connected
+                                                            if let Some(ws) = get_websocket_for_player(player_id) {
+                                                                // First, send the notification message
+                                                                let ws_msg = serde_json::json!({
+                                                                    "event_type": "notification",
+                                                                    "payload": {
+                                                                        "message": message,
+                                                                        "connection_id": conn_id,
+                                                                        "timestamp": chrono::Utc::now().timestamp(),
+                                                                    }
+                                                                });
+                                                                
+                                                                ws.do_send(WebSocketMessage(ws_msg.to_string()));
+                                                                println!("Forwarded notification to player {} via WebSocket", player_id);
+                                                                
+                                                                // If this is a player joined notification and we have a connection ID,
+                                                                // also send a connection_updated event
+                                                                if message.contains("joined your connection") && conn_id.is_some() {
+                                                                    let status_msg = serde_json::json!({
+                                                                        "event_type": "connection_updated",
+                                                                        "payload": {
+                                                                            "type": "joined", 
+                                                                            "connection_id": conn_id.unwrap(),
+                                                                            "status": "Active",
+                                                                            "timestamp": chrono::Utc::now().timestamp(),
+                                                                        }
+                                                                    });
+                                                                    
+                                                                    ws.do_send(WebSocketMessage(status_msg.to_string()));
+                                                                    println!("Sent connection status update to player {} via WebSocket", player_id);
                                                                 }
-                                                            });
-                                                            
-                                                            ws.do_send(WebSocketMessage(ws_msg.to_string()));
-                                                            println!("Forwarded notification to player {} via WebSocket", player_id);
+                                                            }
                                                         }
                                                     }
                                                 },
