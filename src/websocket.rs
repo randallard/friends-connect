@@ -819,3 +819,77 @@ pub async fn setup_notification_consumer(
         }
     });
 }
+
+// Add to the bottom of websocket.rs file
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actix::Actor;
+    use std::time::Duration;
+    use actix_web_actors::ws::WebsocketContext;
+
+    #[test]
+    fn test_websocket_connection_new() {
+        let player_id = "test_player".to_string();
+        let config = RedpandaConfig {
+            bootstrap_servers: "localhost:9092".to_string(),
+            username: "test".to_string(),
+            password: "test".to_string(),
+        };
+        
+        // This test will fail because actual Redpanda producer creation will fail
+        // but we can verify the struct creation logic
+        let ws = WebSocketConnection::new(player_id.clone(), config);
+        
+        assert_eq!(ws.player_id, player_id);
+        assert!(ws.connection_ids.is_empty());
+    }
+
+    #[test]
+    fn test_subscribe_to_connection() {
+        let player_id = "test_player".to_string();
+        let config = RedpandaConfig {
+            bootstrap_servers: "localhost:9092".to_string(),
+            username: "test".to_string(),
+            password: "test".to_string(),
+        };
+        
+        let mut ws = WebSocketConnection::new(player_id.clone(), config);
+        
+        // First subscription should return true
+        let result1 = ws.subscribe_to_connection("conn1");
+        assert!(result1);
+        assert!(ws.connection_ids.contains("conn1"));
+        
+        // Subscribing again should return false (not a new subscription)
+        let result2 = ws.subscribe_to_connection("conn1");
+        assert!(!result2);
+        
+        // Subscribing to a different connection should work
+        let result3 = ws.subscribe_to_connection("conn2");
+        assert!(result3);
+        assert!(ws.connection_ids.contains("conn2"));
+    }
+
+    #[test]
+    fn test_is_subscribed_to() {
+        let player_id = "test_player".to_string();
+        let config = RedpandaConfig {
+            bootstrap_servers: "localhost:9092".to_string(),
+            username: "test".to_string(),
+            password: "test".to_string(),
+        };
+        
+        let mut ws = WebSocketConnection::new(player_id.clone(), config);
+        
+        // Not subscribed initially
+        assert!(!ws.is_subscribed_to("conn1"));
+        
+        // After subscribing
+        ws.subscribe_to_connection("conn1");
+        assert!(ws.is_subscribed_to("conn1"));
+        
+        // Still not subscribed to other connections
+        assert!(!ws.is_subscribed_to("conn2"));
+    }
+}

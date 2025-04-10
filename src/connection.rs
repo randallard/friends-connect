@@ -43,18 +43,18 @@ impl Connection {
             expires_at: now + 604800, // Expires in 1 week (604800 seconds)
         }
     }
- 
+
     pub fn is_expired(&self) -> bool {
         // If already marked as expired, return true
         if self.status == ConnectionStatus::Expired {
             return true;
         }
         
-        // If status is Active (has 2 players), it doesn't expire
-        if self.status == ConnectionStatus::Active {
+        // If status is Active or has 2 or more players, it doesn't expire
+        if self.status == ConnectionStatus::Active || self.players.len() >= 2 {
             return false;
         }
-
+    
         // Check expiration time for Pending connections
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -62,7 +62,8 @@ impl Connection {
             .as_secs() as i64;
             
         self.expires_at <= now
-    }  
+    }
+
 }
 
 #[cfg(test)]
@@ -150,5 +151,60 @@ mod tests {
         
         assert_eq!(connection.players.len(), 1);
         assert_eq!(connection.status, ConnectionStatus::Pending);
+    }
+
+    #[test]
+    fn test_connection_expiration_for_pending_status() {
+        let mut connection = Connection::new("player1".to_string());
+        
+        // Set status explicitly to Pending
+        connection.status = ConnectionStatus::Pending;
+        
+        // Set expires_at to a past time
+        connection.expires_at = 0;
+        
+        // Should be expired
+        assert!(connection.is_expired());
+        
+        // Set expires_at to a future time
+        connection.expires_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64 + 10000;
+            
+        // Should not be expired
+        assert!(!connection.is_expired());
+    }
+
+    #[test]
+    fn test_connection_expiration_for_active_status() {
+        let mut connection = Connection::new("player1".to_string());
+        
+        // Add another player and set status to Active
+        connection.players.push("player2".to_string());
+        connection.status = ConnectionStatus::Active;
+        
+        // Set expires_at to a past time
+        connection.expires_at = 0;
+        
+        // Should NOT be expired because Active connections don't expire
+        assert!(!connection.is_expired());
+    }
+
+    #[test]
+    fn test_connection_expiration_for_expired_status() {
+        let mut connection = Connection::new("player1".to_string());
+        
+        // Set status explicitly to Expired
+        connection.status = ConnectionStatus::Expired;
+        
+        // Set expires_at to a future time 
+        connection.expires_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64 + 10000;
+            
+        // Should still be considered expired because status is Expired
+        assert!(connection.is_expired());
     }
 }

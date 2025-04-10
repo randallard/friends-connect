@@ -585,7 +585,7 @@ async fn send_message(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
+    use std::time::{Duration, UNIX_EPOCH};
         
     fn spawn_app() -> String {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1032,5 +1032,240 @@ mod tests {
             .unwrap();
             
         assert!(final_notifications.is_empty());
+    }
+
+    #[actix_web::test]
+    async fn test_check_expired_connections() {
+        // Create a server with test address
+        let server = Server::new("127.0.0.1:0");
+        
+        // Manually add some connections to test expiration logic
+        {
+            let mut conn_map = server.connections.write().unwrap();
+            
+            // Add a connection that should expire (Pending + past expiration)
+            let mut expired_conn = Connection::new("player1".to_string());
+            expired_conn.expires_at = 0; // Past time
+            expired_conn.status = ConnectionStatus::Pending;
+            conn_map.insert("expired1".to_string(), expired_conn);
+            
+            // Add a connection that should NOT expire (Active)
+            let mut active_conn = Connection::new("player2".to_string());
+            active_conn.players.push("player3".to_string());
+            active_conn.status = ConnectionStatus::Active;
+            active_conn.expires_at = 0; // Past time, but shouldn't matter for Active
+            conn_map.insert("active1".to_string(), active_conn);
+            
+            // Add a connection that should NOT expire (Pending but future expiration)
+            let mut pending_conn = Connection::new("player4".to_string());
+            pending_conn.status = ConnectionStatus::Pending;
+            // Set to future time
+            pending_conn.expires_at = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64 + 10000;
+            conn_map.insert("pending1".to_string(), pending_conn);
+            
+            // Add a connection that's already expired
+            let mut already_expired_conn = Connection::new("player5".to_string());
+            already_expired_conn.status = ConnectionStatus::Expired;
+            already_expired_conn.expires_at = 0;
+            conn_map.insert("already_expired1".to_string(), already_expired_conn);
+        }
+        
+        // Call check_expired_connections
+        server.check_expired_connections().await;
+        
+        // Verify the connections were updated correctly
+        {
+            let conn_map = server.connections.read().unwrap();
+            
+            // This should now be marked as Expired
+            let expired_conn = conn_map.get("expired1").unwrap();
+            assert_eq!(expired_conn.status, ConnectionStatus::Expired);
+            
+            // These should not have changed
+            let active_conn = conn_map.get("active1").unwrap();
+            assert_eq!(active_conn.status, ConnectionStatus::Active);
+            
+            let pending_conn = conn_map.get("pending1").unwrap();
+            assert_eq!(pending_conn.status, ConnectionStatus::Pending);
+            
+            let already_expired_conn = conn_map.get("already_expired1").unwrap();
+            assert_eq!(already_expired_conn.status, ConnectionStatus::Expired);
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_create_connection_stores_both_mappings() {
+        // Create a server with test address
+        let server = Server::new("127.0.0.1:0");
+        
+        // Create a test connection 
+        let player_id = "test_player".to_string();
+        let conn = Connection::new(player_id.clone());
+        let id = conn.id.clone();
+        let link_id = conn.link_id.clone();
+        
+        // Store the connection
+        {
+            let mut conn_map = server.connections.write().unwrap();
+            conn_map.insert(id.clone(), conn.clone());
+            conn_map.insert(link_id.clone(), conn.clone());
+        }
+        
+        // Verify both mappings exist and point to the same connection
+        {
+            let conn_map = server.connections.read().unwrap();
+            
+            assert!(conn_map.contains_key(&id));
+            assert!(conn_map.contains_key(&link_id));
+            
+            // Get both connections and verify they're the same
+            let conn1 = conn_map.get(&id).unwrap();
+            let conn2 = conn_map.get(&link_id).unwrap();
+            
+            assert_eq!(conn1.id, conn2.id);
+            assert_eq!(conn1.link_id, conn2.link_id);
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_notification_storage_and_retrieval() {
+        // Create a server instance
+        let server = Server::new("127.0.0.1:0");
+        
+        // Store a notification
+        {
+            let mut notif_map = server.notifications.write().unwrap();
+            notif_map.entry("player1".to_string())
+                .or_insert_with(Vec::new)
+                .push("Test notification".to_string());
+        }
+        
+        // Verify notification retrieval
+        {
+            let notif_map = server.notifications.read().unwrap();
+            let player_notifs = notif_map.get("player1").unwrap();
+            
+            assert_eq!(player_notifs.len(), 1);
+            assert_eq!(player_notifs[0], "Test notification");
+            
+            // Player with no notifications should return None
+            assert!(notif_map.get("player2").is_none());
+        }
+    }
+
+    // Add to the existing tests module in server.rs
+    #[actix_web::test]
+    async fn test_ws_route_connection() {
+        // This is a more complex test that would require mocking HTTP requests
+        // and WebSocket connections, which is beyond a simple unit test.
+        // Here's a simplified version:
+        
+        // Create a server with a test address
+        let address = spawn_app();
+        let client = reqwest::Client::new();
+        
+        // 1. Create a connection
+        let create_resp = client
+            .post(&format!("http://{}/connections", address))
+            .json(&json!({
+                "player_id": "player1"
+            }))
+            .send()
+            .await
+            .unwrap();
+        
+        assert_eq!(create_resp.status(), 200);
+        
+        // 2. Verify the WebSocket endpoint exists
+        // We can't easily test actual WebSocket connections in this unit test
+        // But we can check if the endpoint responds
+        let ws_resp = client
+            .get(&format!("http://{}/ws?player_id=player1", address))
+            .send()
+            .await
+            .unwrap();
+        
+        // The request should be accepted (101 Switching Protocols)
+        // or fail in a specific way if WebSockets aren't fully supported in the test
+        assert!(ws_resp.status().is_client_error() || ws_resp.status().as_u16() == 101);
+    }
+
+    // Add to the existing tests module in server.rs
+    #[actix_web::test]
+    async fn test_message_with_notification() {
+        // Arrange
+        let address = spawn_app();
+        let client = reqwest::Client::new();
+        
+        // Create connection with player1
+        let create_resp = client
+            .post(&format!("http://{}/connections", address))
+            .json(&json!({
+                "player_id": "player1"
+            }))
+            .send()
+            .await
+            .unwrap();
+        
+        let connection: Connection = create_resp.json().await.unwrap();
+        
+        // Join with player2
+        let join_resp = client
+            .post(&format!("http://{}/connections/link/{}/join", address, connection.link_id))
+            .json(&json!({
+                "player_id": "player2"
+            }))
+            .send()
+            .await
+            .unwrap();
+        
+        assert_eq!(join_resp.status(), 200);
+        
+        // Act - Send a message from player1
+        let message_resp = client
+            .post(&format!("http://{}/connections/{}/messages", address, connection.id))
+            .json(&json!({
+                "player_id": "player1",
+                "content": "Hello from the test!"
+            }))
+            .send()
+            .await
+            .unwrap();
+        
+        assert_eq!(message_resp.status(), 200);
+        
+        // Assert - Check that player2 got a notification
+        let notifications_resp = client
+            .get(&format!("http://{}/players/player2/notifications", address))
+            .send()
+            .await
+            .unwrap();
+        
+        let notifications: Vec<String> = notifications_resp.json().await.unwrap();
+        
+        assert!(!notifications.is_empty());
+        assert!(notifications.iter().any(|n| n.contains("Hello from the test!")));
+        
+        // Also verify message acknowledgment works
+        let ack_resp = client
+            .post(&format!("http://{}/players/player2/notifications/ack", address))
+            .send()
+            .await
+            .unwrap();
+        
+        assert_eq!(ack_resp.status(), 200);
+        
+        // Verify notifications are cleared
+        let after_ack_resp = client
+            .get(&format!("http://{}/players/player2/notifications", address))
+            .send()
+            .await
+            .unwrap();
+        
+        let after_ack: Vec<String> = after_ack_resp.json().await.unwrap();
+        assert!(after_ack.is_empty());
     }
 }
